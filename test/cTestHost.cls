@@ -15,7 +15,7 @@ Attribute VB_Exposed = True
 ' cTestHost - public COM entry point for the test suite
 '
 ' Createable from PowerShell / VBScript (32-bit host, the DLL is x86):
-'   Set o = CreateObject("RC6SQLiteTest.cTestHost")
+'   Set o = CreateObject("TC6SQLiteTest.cTestHost")
 '   rc = o.RunAll("C:\...\testrun.log")   ' rc = number of failed tests
 '   WScript.Echo o.Report
 ' RunTests(Filter, OutputFile) runs only tests whose name contains any of

@@ -1,4 +1,4 @@
-# RC6 SQLite replacement
+# TC6 SQLite replacement
 
 ## Coding Style for this project
 

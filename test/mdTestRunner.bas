@@ -1,6 +1,6 @@
 Attribute VB_Name = "mdTestRunner"
 '=========================================================================
-' mdTestRunner - test engine for the RC6 SQLite replacement
+' mdTestRunner - test engine for the TC6 SQLite replacement
 '
 ' Driven by the public cTestHost COM class (see cTestHost.cls). One
 ' standard module per class holds that class's tests (e.g.
@@ -34,7 +34,7 @@ Public Sub TestReset(sFilter As String)
     m_lTestsFailed = 0
     m_lTestsSkipped = 0
     m_bCurrentFailed = False
-    pvLogLine "=== RC6 SQLite replacement - test run " & Format$(Now, "yyyy-mm-dd hh:nn:ss") & " ==="
+    pvLogLine "=== TC6 SQLite replacement - test run " & Format$(Now, "yyyy-mm-dd hh:nn:ss") & " ==="
     If Len(sFilter) > 0 Then
         pvLogLine "filter: " & sFilter
     End If

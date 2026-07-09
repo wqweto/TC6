@@ -1,4 +1,4 @@
-# RC6 SQLite Replacement — Working Notes
+# TC6 SQLite Replacement — Working Notes
 
 ## Goal
 
@@ -207,7 +207,7 @@ VB `String` (which is UTF-16).
 
 ## [test/TestRunner.vbp](test/TestRunner.vbp) — ActiveX-DLL test runner
 
-An **ActiveX DLL** (`Type=OleDll`, project name `RC6SQLiteTest`) that compiles
+An **ActiveX DLL** (`Type=OleDll`, project name `TC6SQLiteTest`) that compiles
 **all 26 classes + both shared modules** plus the test code, and exposes one
 public COM class, `cTestHost`, to drive the suite from PowerShell/VBScript. This
 is the single project going forward — the old `apitest` Std-EXE was removed (its
@@ -234,7 +234,7 @@ API smoke-check is now covered by `cConnection.CreateAndInsert`). Current run:
 <log> -Wait` — VB6 is GUI-subsystem so the shell must wait; the `/out` log is
 append-mode. Building an ActiveX DLL **auto-registers** it on this machine
 (No/Project compatibility, `CompatibleMode=0`, so CLSIDs churn each build — the
-stable `RC6SQLiteTest.cTestHost` ProgID always resolves to the latest build).
+stable `TC6SQLiteTest.cTestHost` ProgID always resolves to the latest build).
 
 **Run (the DLL is x86 → use a 32-bit script host):**
 
@@ -242,10 +242,10 @@ stable `RC6SQLiteTest.cTestHost` ProgID always resolves to the latest build).
 C:\Windows\SysWOW64\cscript.exe //nologo test\run_tests.vbs [/out:log] [/filter:tokens]
 ```
 
-`run_tests.vbs` does `CreateObject("RC6SQLiteTest.cTestHost")`, calls
+`run_tests.vbs` does `CreateObject("TC6SQLiteTest.cTestHost")`, calls
 `RunTests(filter, out)`, echoes `.Report`, and `WScript.Quit`s the failed count.
 Equivalently from 32-bit PowerShell:
-`& $env:WINDIR\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -Command "(New-Object -ComObject RC6SQLiteTest.cTestHost).RunAll('out.log')"`.
+`& $env:WINDIR\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -Command "(New-Object -ComObject TC6SQLiteTest.cTestHost).RunAll('out.log')"`.
 NB: invoke `cscript` with the call operator, not `Start-Process` — the latter
 mangled the `/out:C:\…` argument.
 
@@ -276,7 +276,7 @@ type. `cTestHost` is `MultiUse`.
       plus `FromUtf8Ptr` (null-terminated UTF-8 `char*` → VB String, over
       `lstrlenA`+`MultiByteToWideChar`) — needed by `errmsg`/`column_text`.
 - [x] `cConnection` core implemented (see section below).
-- [x] ActiveX-DLL project (`RC6SQLiteTest`) wiring all 26 classes + modules
+- [x] ActiveX-DLL project (`TC6SQLiteTest`) wiring all 26 classes + modules
       together; class instancing restored (8 `MultiUse`, 18 `PublicNotCreatable`).
 - [x] Class test runner driven over COM by `cTestHost` (PowerShell/VBScript),
       with test-name filter and output-file options; 8 tests / 33 checks PASS
