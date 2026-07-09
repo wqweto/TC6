@@ -10,6 +10,7 @@ Public Sub RunRecordsetTests()
     Test_TypesAndValueMatrix
     Test_Blob
     Test_GetRows
+    Test_DuplicateFieldNames
     Test_Empty
     Test_OpenSchema
 End Sub
@@ -136,6 +137,26 @@ Private Sub Test_GetRows()
     AssertEqLng UBound(vRows, 2), 2, "GetRows row upper bound"
     AssertEqLng CLng(vRows(0, 0)), 1, "GetRows(col0,row0) = first id"
     AssertEqStr CStr(vRows(1, 2)), "gamma", "GetRows(col1,row2) = last name"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_DuplicateFieldNames()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+
+    If Not TestBegin("cRecordset.DuplicateFieldNames") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    '--- two result columns both named "id" (name aliased to id)
+    Set oRs = oCnn.OpenRecordset("SELECT id, name AS id FROM t ORDER BY id")
+    AssertEqLng CLng(oRs.Fields.Count), 2, "two fields, both named id"
+    AssertEqLng CLng(oRs.Fields("id").Value), 1, "Fields(""id"") returns the first occurrence"
+    AssertEqStr CStr(oRs.Fields(1).Value), "alpha", "Fields(1) reaches the duplicate by index"
+    AssertTrue oRs.Fields.Exists("id"), "Exists(""id"") true despite duplicate"
+    AssertTrue Not oRs.Fields.Exists("name"), "Exists(""name"") false (aliased away)"
     TestEnd
     Exit Sub
 EH:

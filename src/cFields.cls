@@ -15,6 +15,12 @@ Attribute VB_Exposed = True
 ' cFields - the columns of a cRecordset. One cField per column, created
 ' and wired by cRecordset (frInit). Item accepts a 0-based index or a
 ' field name; For Each iterates the fields in order.
+'
+' The backing collection is keyed on field name, so Item(name)/Exists are
+' O(1) lookups (no per-access scan of the parent recordset). SQLite allows
+' duplicate result-column names, so only the first occurrence of a name is
+' keyed - later duplicates are still reachable by index (matching the
+' first-match semantics of a name lookup).
 '=========================================================================
 Option Explicit
 
@@ -31,17 +37,22 @@ Attribute Item.VB_UserMemId = 0
 
     If IsNumeric(ZeroBasedIdx_Or_FieldName) Then
         lIdx = CLng(ZeroBasedIdx_Or_FieldName)
+        If lIdx < 0 Or lIdx >= m_cItems.Count Then
+            Err.Raise 9
+        End If
+        Set Item = m_cItems.Item(lIdx + 1)
     Else
-        lIdx = m_oRs.frFieldIndex(CStr(ZeroBasedIdx_Or_FieldName))
+        Set Item = pvItemByName(CStr(ZeroBasedIdx_Or_FieldName))
     End If
-    If lIdx < 0 Or lIdx >= m_cItems.Count Then
-        Err.Raise 9
-    End If
-    Set Item = m_cItems.Item(lIdx + 1)
 End Property
 
 Public Function Exists(FieldName As String) As Boolean
-    Exists = (m_oRs.frFieldIndex(FieldName) >= 0)
+    Dim oField          As cField
+
+    On Error GoTo QH
+    Set oField = m_cItems.Item(FieldName)
+    Exists = True
+QH:
 End Function
 
 Public Property Get NewEnum() As IUnknown
@@ -59,6 +70,26 @@ Friend Sub frInit(oRs As cRecordset)
     For lCol = 0 To oRs.frFieldCount - 1
         Set oField = New cField
         oField.frInit oRs, lCol
-        m_cItems.Add oField
+        pvAdd oField, oRs.frFieldName(lCol)
     Next
 End Sub
+
+Private Sub pvAdd(oField As cField, sName As String)
+    '--- key on the field name; a duplicate name (or an empty one) falls back
+    '--- to a positional-only Add so the collection stays 1:1 with the columns
+    On Error GoTo QH
+    If Len(sName) > 0 Then
+        m_cItems.Add oField, sName
+        Exit Sub
+    End If
+QH:
+    m_cItems.Add oField
+End Sub
+
+Private Function pvItemByName(sName As String) As cField
+    On Error GoTo EH
+    Set pvItemByName = m_cItems.Item(sName)
+    Exit Function
+EH:
+    Err.Raise 9, "cFields", "Unknown field '" & sName & "'"
+End Function

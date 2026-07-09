@@ -347,7 +347,10 @@ by `cConnection.OpenRecordset`/`OpenSchema` (`frOpen`), or via the public
   bound to the recordset's *current* row (`frInit`/`frCellValue`). `cField`:
   `Value` (Get), `Name`, `ColumnType` (inferred from the VB value),
   `IndexInFieldList`, `ActualSize`. `cFields`: `Item` (0-based index **or**
-  name), `Count`, `Exists`, `NewEnum` (`For Each`).
+  name), `Count`, `Exists`, `NewEnum` (`For Each`). The backing
+  `VBA.Collection` is **keyed on field name**, so `Item(name)`/`Exists` are
+  O(1) (no per-access scan) — duplicate result-column names keep the first
+  occurrence keyed, the rest reachable by index.
 - **Read helpers**: `ValueMatrix(row, col)` (Get), `GetRows` (ADO-style
   `(field, record)` array; `TransPosed` and a comma-separated field subset
   supported).
