@@ -31,6 +31,7 @@ Module=mdSqliteApi; ..\src\mdSqliteApi.bas
 Module=mdGlobals; ..\src\mdGlobals.bas
 Module=mdTestRunner; mdTestRunner.bas
 Module=mdConnectionTests; mdConnectionTests.bas
+Module=mdRecordsetTests; mdRecordsetTests.bas
 Startup="(None)"
 ExeName32="TestRunner.dll"
 Command32=""

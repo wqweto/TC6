@@ -171,6 +171,7 @@ Public Function OpenDBReadOnly(Optional FileName As String, Optional EncrKey As 
 End Function
 
 Public Function OpenSchema() As cRecordset
+    Set OpenSchema = OpenRecordset("SELECT type, name, tbl_name, rootpage, sql FROM sqlite_master ORDER BY type, name")
 End Function
 
 Public Sub ReKey(Optional NewEncrKey As String)
@@ -187,6 +188,11 @@ Public Sub DetachDataBase(DataBaseName As String)
 End Sub
 
 Public Function OpenRecordset(SQL As String, Optional ByVal ReadOnly As Boolean) As cRecordset
+    Dim oRs             As cRecordset
+
+    Set oRs = New cRecordset
+    oRs.frOpen Me, SQL, ReadOnly
+    Set OpenRecordset = oRs
 End Function
 
 Public Sub BeginTrans(Optional SavePointName As String)
@@ -361,6 +367,10 @@ End Function
 
 Public Sub ExecCmd(ByVal SQL As String, ParamArray P() As Variant)
 End Sub
+
+Friend Property Get frDbHandle() As LongPtr
+    frDbHandle = m_hDb
+End Property
 
 '--- private helpers ------------------------------------------------------
 

@@ -279,11 +279,14 @@ type. `cTestHost` is `MultiUse`.
 - [x] ActiveX-DLL project (`TC6SQLiteTest`) wiring all 26 classes + modules
       together; class instancing restored (8 `MultiUse`, 18 `PublicNotCreatable`).
 - [x] Class test runner driven over COM by `cTestHost` (PowerShell/VBScript),
-      with test-name filter and output-file options; 8 tests / 33 checks PASS
-      against winsqlite3.dll (see the TestRunner section above).
-- [ ] Implement `cRecordset` (query/navigation), then the object-factory
-      members of `cConnection` that return it (`OpenRecordset`/`GetRs`/
-      `OpenSchema`) and `cCommand`/`cSelectCommand`/`cCursor`.
+      with test-name filter and output-file options; **15 tests / 69 checks
+      PASS** against winsqlite3.dll (see the TestRunner section above).
+- [x] `cRecordset` read core + `cFields`/`cField`; `cConnection.OpenRecordset`
+      and `OpenSchema` wired to it (see section below).
+- [ ] `cRecordset` write surface (AddNew/Delete/UpdateBatch/ResetChanges),
+      Sort/Find, Content serialization, ADO interop, JSON export.
+- [ ] Parameterised `cConnection.GetRs`/`ExecCmd` and
+      `cCommand`/`cSelectCommand`/`cCursor` (need value→`bind_*` binding).
 
 ## [src/cConnection.cls](src/cConnection.cls) — connection wrapper
 
@@ -315,7 +318,44 @@ pass):
   `Currency` the API returns (raw int64 bits) via `CDec(cur) * 10000`
   (`#If Win64` uses the native `LongLong`). Verified: rowids 1, 2.
 
-**Left as stubs** (need classes not yet built): `OpenRecordset`/`GetRs`/
-`OpenSchema`/`ExecCmd`, `CreateCommand`/`CreateSelectCommand`/`CreateCursor`,
+`OpenRecordset`/`OpenSchema` are now implemented (they build a `cRecordset`,
+via the `Friend Property Get frDbHandle` accessor that hands the raw
+`sqlite3*` to the recordset).
+
+**Left as stubs** (need classes/binding not yet built): `GetRs`/`ExecCmd`
+(parameterised), `CreateCommand`/`CreateSelectCommand`/`CreateCursor`,
 `DataBases`/`MemDB`, `CopyDatabase`, the UDF/collation add/remove pair, and
 the ADO/`CreateTableFrom*` migration surface.
+
+## [src/cRecordset.cls](src/cRecordset.cls) — disconnected recordset
+
+Reads the **entire** result set into an in-memory matrix on open, then serves
+navigation/field access from memory (RC6's recordsets are disconnected). Built
+by `cConnection.OpenRecordset`/`OpenSchema` (`frOpen`), or via the public
+`OpenRecordset(SQL, Cnn, ReadOnly)`.
+
+- **Load**: `prepare_v2` → `step` loop → `column_*` into `m_vData(col, row)`
+  (a `Variant` matrix, last dim = row so `ReDim Preserve` can grow it by
+  doubling). Column values map by storage class: INTEGER via the x86
+  `Currency`→`CDec*10000` int64 recovery (Long when it fits, else Decimal),
+  FLOAT→`Double`, TEXT→`FromUtf8Ptr`, BLOB→`Byte()` (`RtlMoveMemory` from
+  `column_blob`), NULL→`Null`.
+- **Navigation**: `RecordCount`, `BOF`/`EOF`, `MoveFirst/Last/Next/Previous`,
+  `AbsolutePosition`/`Bookmark` (get/set), `ReQuery`; raises `Move`/
+  `QueryFinished`. Empty set ⇒ `BOF And EOF`.
+- **Fields**: `Fields` (default member) → `cFields`, a collection of `cField`
+  bound to the recordset's *current* row (`frInit`/`frCellValue`). `cField`:
+  `Value` (Get), `Name`, `ColumnType` (inferred from the VB value),
+  `IndexInFieldList`, `ActualSize`. `cFields`: `Item` (0-based index **or**
+  name), `Count`, `Exists`, `NewEnum` (`For Each`).
+- **Read helpers**: `ValueMatrix(row, col)` (Get), `GetRows` (ADO-style
+  `(field, record)` array; `TransPosed` and a comma-separated field subset
+  supported).
+- **Left raising `Not implemented`**: the write surface (`AddNew`/`Delete`/
+  `UpdateBatch`/`ResetChanges`/`ValueMatrix` set/`cField.Value` set), `Sort`/
+  `Find*`, `Content*`, `ToJSONUTF8`, `GetRowsWithHeaders`, ADO interop.
+
+**Gotcha:** `cField`'s `FieldType` enum (`SQLite_INTEGER`…) collides
+case-insensitively with `mdSqliteApi`'s `SQLITE_INTEGER`… constants. VB6 only
+errors on *unqualified* use from a third module — `cRecordset.pvReadColumn`
+qualifies them `mdSqliteApi.SQLITE_*`; test code avoids both names.
