@@ -244,10 +244,49 @@ on it explicitly, and the `/out` log is **append-mode**.
 - [x] VB6 (x86) + tB dual-target compatibility of `mdSqliteApi.bas`.
 - [x] Std-EXE test harness compiles AND runs against winsqlite3.dll
       (open/prepare/step/column/close all verified, SQLite 3.51.1).
-- [ ] Implement bodies, starting with `cConnection` (open/exec) and
-      `cRecordset` (query/navigation).
-- [ ] Add a UTF-8 string helper module (VB String ⇄ UTF-8 buffer/LongPtr)
-      needed by every text-passing API call. Note the classes still reference
-      `cCollection` (RC6) and use ActiveX instancing, so they will need an
-      ActiveX-DLL project (not Std-EXE) or stubbing to compile.
-- [ ] Add a `.twinproj`/project file wiring the classes together.
+- [x] UTF-8 string helpers in `mdGlobals.bas`: `ToUtf8Array`/`FromUtf8Array`
+      plus `FromUtf8Ptr` (null-terminated UTF-8 `char*` → VB String, over
+      `lstrlenA`+`MultiByteToWideChar`) — needed by `errmsg`/`column_text`.
+- [x] `cConnection` core implemented (see section below).
+- [ ] Implement `cRecordset` (query/navigation), then the object-factory
+      members of `cConnection` that return it (`OpenRecordset`/`GetRs`/
+      `OpenSchema`) and `cCommand`/`cSelectCommand`/`cCursor`.
+- [ ] Add a `.twinproj`/project file wiring the classes together. All class
+      references are now project types or intrinsics (`cCollection` → the
+      intrinsic `VBA.Collection`), so an ActiveX-DLL project no longer needs
+      an external RC6 reference to compile.
+
+## [src/cConnection.cls](src/cConnection.cls) — connection wrapper
+
+First class fleshed out. A thin wrapper over `mdSqliteApi` holding the
+`sqlite3*` handle (`m_hDb As LongPtr`) and a `VBA.Collection` savepoint stack.
+
+**Implemented and verified** (call sequences exercised at module level against
+winsqlite3.dll 3.51.1 — open/exec/pragma-scalar/savepoints/errmsg/rowid all
+pass):
+
+- Lifecycle: `CreateNewDB`/`OpenDB` (`READWRITE|CREATE`), `OpenDBReadOnly`
+  (`READONLY`) via `sqlite3_open_v2`; `Class_Terminate` closes with
+  `close_v2`. `EncrKey`/`EnableVBFunctions` args accepted but ignored (no
+  codec / no VB-UDFs yet); `ReKey` raises (winsqlite3 has no codec).
+- `Execute` (via `sqlite3_exec`, raises `vbObjectError` with `errmsg` on
+  failure); `AttachDataBase`/`DetachDataBase`/`CompactDataBase` as DDL.
+- Transactions: `BeginTrans`/`CommitTrans`/`RollbackTrans` maintain the
+  savepoint stack (empty-string marker = outer `BEGIN`; a name = `SAVEPOINT`),
+  emit `BEGIN`/`COMMIT`/`ROLLBACK` and `SAVEPOINT`/`RELEASE`/`ROLLBACK TO`,
+  and raise the matching events. Nesting gated on `EnableNestedTransactions`.
+- Info/pragmas: `Version`, `LastDBError`/`GetSqliteErrStr`/`LastDBErrCode`,
+  `AffectedRows`/`TotalAffectedRowsInSession`, `LastInsertAutoID`,
+  `PageSize`/`Synchronous`/`BusyTimeOutSeconds`, `CheckIntegrity`, `Cancel`
+  (`sqlite3_interrupt`). Identifiers/strings quoted via private `pQuoteId`/
+  `pQuoteStr`.
+- Date helpers (`GetDateString` etc.) as SQLite text formats; `NewFieldDefs`
+  returns `New Collection`.
+- **int64 on x86**: `LastInsertAutoID` recovers the true rowid from the
+  `Currency` the API returns (raw int64 bits) via `CDec(cur) * 10000`
+  (`#If Win64` uses the native `LongLong`). Verified: rowids 1, 2.
+
+**Left as stubs** (need classes not yet built): `OpenRecordset`/`GetRs`/
+`OpenSchema`/`ExecCmd`, `CreateCommand`/`CreateSelectCommand`/`CreateCursor`,
+`DataBases`/`MemDB`, `CopyDatabase`, the UDF/collation add/remove pair, and
+the ADO/`CreateTableFrom*` migration surface.

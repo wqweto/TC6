@@ -9,6 +9,7 @@ Private Const CP_UTF8                       As Long = 65001
 
 Private Declare Function WideCharToMultiByte Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, ByVal lpWideCharStr As Long, ByVal cchWideChar As Long, lpMultiByteStr As Any, ByVal cchMultiByte As Long, ByVal lpDefaultChar As Long, ByVal lpUsedDefaultChar As Long) As Long
 Private Declare Function MultiByteToWideChar Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, lpMultiByteStr As Any, ByVal cchMultiByte As Long, ByVal lpWideCharStr As Long, ByVal cchWideChar As Long) As Long
+Private Declare Function lstrlenA Lib "kernel32" (ByVal lpString As LongPtr) As Long
 
 Public Function ToUtf8Array(sText As String) As Byte()
     Dim baRetVal()      As Byte
@@ -26,10 +27,25 @@ End Function
 
 Public Function FromUtf8Array(baText() As Byte) As String
     Dim lSize           As Long
-    
+
     If UBound(baText) >= 0 Then
         FromUtf8Array = String$(2 * (UBound(baText) + 1), 0)
         lSize = MultiByteToWideChar(CP_UTF8, 0, baText(0), UBound(baText) + 1, StrPtr(FromUtf8Array), Len(FromUtf8Array))
         FromUtf8Array = Left$(FromUtf8Array, lSize)
+    End If
+End Function
+
+Public Function FromUtf8Ptr(ByVal lpUtf8 As LongPtr) As String
+    Dim lLen            As Long
+    Dim lSize           As Long
+
+    If lpUtf8 = 0 Then
+        Exit Function
+    End If
+    lLen = lstrlenA(lpUtf8)
+    If lLen > 0 Then
+        FromUtf8Ptr = String$(lLen, 0)
+        lSize = MultiByteToWideChar(CP_UTF8, 0, ByVal lpUtf8, lLen, StrPtr(FromUtf8Ptr), lLen)
+        FromUtf8Ptr = Left$(FromUtf8Ptr, lSize)
     End If
 End Function
