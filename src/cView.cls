@@ -1,6 +1,6 @@
 VERSION 1.0 CLASS
 BEGIN
-  MultiUse = -1  'True
+  MultiUse = 0  'False
   Persistable = 0  'NotPersistable
   DataBindingBehavior = 0  'vbNone
   DataSourceBehavior  = 0  'vbNone
@@ -10,7 +10,7 @@ Attribute VB_Name = "cView"
 Attribute VB_GlobalNameSpace = False
 Attribute VB_Creatable = False
 Attribute VB_PredeclaredId = False
-Attribute VB_Exposed = True
+Attribute VB_Exposed = False
 Option Explicit
 
 Public Property Get Name() As String

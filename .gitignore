@@ -5,6 +5,7 @@
 *.bak
 *.log
 *.scc
+*.exe
 **/_del/*
 **/.claude/*
 *.dll

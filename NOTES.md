@@ -234,6 +234,38 @@ Build/run recipe (headless): `Start-Process VB6.EXE -ArgumentList '/make',
 <vbp>,'/out',<log> -Wait` — VB6 is a GUI-subsystem app, so the shell must wait
 on it explicitly, and the `/out` log is **append-mode**.
 
+## [test/TestRunner.vbp](test/TestRunner.vbp) — class test runner
+
+A single Std-EXE that compiles **all 26 classes + both shared modules** and runs
+a suite of tests against them, so the replacement can be developed test-first.
+Built/run headless like `apitest`. Current run: **8 tests / 33 checks, all
+PASS** (exercises the real `cConnection` against winsqlite3.dll 3.51.1).
+
+- [test/mdTestRunner.bas](test/mdTestRunner.bas) — the harness. `Sub Main` calls
+  one `RunXxxTests` per class; `TestBegin`/`TestEnd`/`TestErr` bracket each test
+  (own `On Error GoTo EH`, so one failure never aborts the rest);
+  `AssertTrue`/`AssertEqLng`/`AssertEqStr` record pass/fail and keep going.
+  Output goes to `test\testrun.log`.
+- [test/mdConnectionTests.bas](test/mdConnectionTests.bas) — one standard module
+  **per class** holds that class's tests (`Test_*` subs + a public
+  `RunConnectionTests`). Add a new module + one line in `Main` for each class.
+
+Two things the runner project needs that `apitest` did not:
+
+- **`Reference=…stdole2.tlb#OLE Automation`** in the vbp — the classes use
+  `IUnknown` (the `NewEnum` collection members); without the OLE Automation
+  reference VB6 reports *"User-defined type not defined"*.
+- **Class instancing = Private.** A Standard EXE only permits `Private` classes
+  (VB6 force-downgrades anything public with a warning). All 26 `.cls` were set
+  to `MultiUse = 0 / VB_Creatable = False / VB_Exposed = False`. This also fixed
+  a latent bug: the schema/child stubs had an **invalid** header (`MultiUse = -1`
+  with `VB_Creatable = False`) that loaded in no project type. **When the
+  ActiveX-DLL project is built, restore instancing**: the 8 creatable classes
+  (`cConnection`, `cRecordset`, `cMemDB`, `cConverter`, `cDBAccess`, `IFunction`,
+  `IAggregateFunction`, `ICollation`) → `MultiUse`; the other 18 →
+  `PublicNotCreatable`. `New` still works on `Private` classes within the project,
+  so the tests are unaffected.
+
 ## Status / next steps
 
 - [x] SQLite classes identified from the typelib.
@@ -248,6 +280,9 @@ on it explicitly, and the `/out` log is **append-mode**.
       plus `FromUtf8Ptr` (null-terminated UTF-8 `char*` → VB String, over
       `lstrlenA`+`MultiByteToWideChar`) — needed by `errmsg`/`column_text`.
 - [x] `cConnection` core implemented (see section below).
+- [x] Class test runner: single Std-EXE (`TestRunner.vbp`) with all 26 classes
+      + shared modules + one test module per class; 8 tests / 33 checks PASS
+      against winsqlite3.dll (see the TestRunner section above).
 - [ ] Implement `cRecordset` (query/navigation), then the object-factory
       members of `cConnection` that return it (`OpenRecordset`/`GetRs`/
       `OpenSchema`) and `cCommand`/`cSelectCommand`/`cCursor`.
