@@ -278,8 +278,8 @@ pass):
 - Info/pragmas: `Version`, `LastDBError`/`GetSqliteErrStr`/`LastDBErrCode`,
   `AffectedRows`/`TotalAffectedRowsInSession`, `LastInsertAutoID`,
   `PageSize`/`Synchronous`/`BusyTimeOutSeconds`, `CheckIntegrity`, `Cancel`
-  (`sqlite3_interrupt`). Identifiers/strings quoted via private `pQuoteId`/
-  `pQuoteStr`.
+  (`sqlite3_interrupt`). Identifiers/strings quoted via private `pvQuoteId`/
+  `pvQuoteStr` (private helpers carry the `pv` prefix per CLAUDE.md).
 - Date helpers (`GetDateString` etc.) as SQLite text formats; `NewFieldDefs`
   returns `New Collection`.
 - **int64 on x86**: `LastInsertAutoID` recovers the true rowid from the

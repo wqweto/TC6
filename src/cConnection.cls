@@ -72,7 +72,7 @@ Public Property Let FileName(FileName As String)
 End Property
 
 Public Property Get PageSize() As Long
-    PageSize = pGetScalarLong("PRAGMA page_size")
+    PageSize = pvGetScalarLong("PRAGMA page_size")
 End Property
 
 Public Property Get BusyTimeOutSeconds() As Double
@@ -87,7 +87,7 @@ Public Property Let BusyTimeOutSeconds(ByVal RHS As Double)
 End Property
 
 Public Property Get Synchronous() As eConnectionSynchronousType
-    Synchronous = pGetScalarLong("PRAGMA synchronous")
+    Synchronous = pvGetScalarLong("PRAGMA synchronous")
 End Property
 
 Public Property Let Synchronous(ByVal RHS As eConnectionSynchronousType)
@@ -113,7 +113,7 @@ Public Property Get TotalAffectedRowsInSession() As Long
 End Property
 
 Public Property Get LastInsertAutoID() As Variant
-    LastInsertAutoID = pLastInsertId()
+    LastInsertAutoID = pvLastInsertId()
 End Property
 
 Public Property Get EnableNestedTransactions() As Boolean
@@ -148,26 +148,26 @@ Public Function Version() As String
 End Function
 
 Public Function CheckIntegrity() As String
-    CheckIntegrity = pGetScalarText("PRAGMA integrity_check")
+    CheckIntegrity = pvGetScalarText("PRAGMA integrity_check")
 End Function
 
 Public Function CreateNewDB(Optional FileName As String = ":memory:", Optional EncrKey As String, Optional ByVal EnableVBFunctions As Boolean = True) As Boolean
     '--- winsqlite3.dll has no codec, so EncrKey is accepted but ignored
-    CreateNewDB = pOpenDatabase(FileName, SQLITE_OPEN_READWRITE Or SQLITE_OPEN_CREATE)
+    CreateNewDB = pvOpenDatabase(FileName, SQLITE_OPEN_READWRITE Or SQLITE_OPEN_CREATE)
 End Function
 
 Public Function OpenDB(Optional FileName As String, Optional EncrKey As String, Optional ByVal EnableVBFunctions As Boolean = True) As Boolean
     If Len(FileName) = 0 Then
         FileName = m_sFileName
     End If
-    OpenDB = pOpenDatabase(FileName, SQLITE_OPEN_READWRITE Or SQLITE_OPEN_CREATE)
+    OpenDB = pvOpenDatabase(FileName, SQLITE_OPEN_READWRITE Or SQLITE_OPEN_CREATE)
 End Function
 
 Public Function OpenDBReadOnly(Optional FileName As String, Optional EncrKey As String, Optional ByVal EnableVBFunctions As Boolean = True) As Boolean
     If Len(FileName) = 0 Then
         FileName = m_sFileName
     End If
-    OpenDBReadOnly = pOpenDatabase(FileName, SQLITE_OPEN_READONLY)
+    OpenDBReadOnly = pvOpenDatabase(FileName, SQLITE_OPEN_READONLY)
 End Function
 
 Public Function OpenSchema() As cRecordset
@@ -179,11 +179,11 @@ Public Sub ReKey(Optional NewEncrKey As String)
 End Sub
 
 Public Sub AttachDataBase(FileName As String, DataBaseName As String, Optional EncrKey As String)
-    Execute "ATTACH DATABASE " & pQuoteStr(FileName) & " AS " & pQuoteId(DataBaseName)
+    Execute "ATTACH DATABASE " & pvQuoteStr(FileName) & " AS " & pvQuoteId(DataBaseName)
 End Sub
 
 Public Sub DetachDataBase(DataBaseName As String)
-    Execute "DETACH DATABASE " & pQuoteId(DataBaseName)
+    Execute "DETACH DATABASE " & pvQuoteId(DataBaseName)
 End Sub
 
 Public Function OpenRecordset(SQL As String, Optional ByVal ReadOnly As Boolean) As cRecordset
@@ -207,7 +207,7 @@ Public Sub BeginTrans(Optional SavePointName As String)
     Else
         sName = SavePointName
     End If
-    Execute "SAVEPOINT " & pQuoteId(sName)
+    Execute "SAVEPOINT " & pvQuoteId(sName)
     m_cTransactionStack.Add sName
 End Sub
 
@@ -223,7 +223,7 @@ Public Sub CommitTrans(Optional SavePointName As String)
         Execute "COMMIT"
         RaiseEvent CommitTransComplete
     Else
-        Execute "RELEASE SAVEPOINT " & pQuoteId(sName)
+        Execute "RELEASE SAVEPOINT " & pvQuoteId(sName)
         RaiseEvent SavePointReleased(sName)
         RaiseEvent CommitForSavePointComplete(sName)
     End If
@@ -237,10 +237,10 @@ Public Sub RollbackTrans(Optional ToSavePointName As String, Optional ByVal ReUs
     End If
     '--- rollback to a named savepoint without unwinding the whole transaction
     If Len(ToSavePointName) > 0 Then
-        Execute "ROLLBACK TO SAVEPOINT " & pQuoteId(ToSavePointName)
+        Execute "ROLLBACK TO SAVEPOINT " & pvQuoteId(ToSavePointName)
         If Not ReUseSavePointForNewAttempts Then
-            Execute "RELEASE SAVEPOINT " & pQuoteId(ToSavePointName)
-            pPopTo ToSavePointName
+            Execute "RELEASE SAVEPOINT " & pvQuoteId(ToSavePointName)
+            pvPopTo ToSavePointName
         End If
         RaiseEvent RollbackToSavePointComplete(ToSavePointName)
         Exit Sub
@@ -252,8 +252,8 @@ Public Sub RollbackTrans(Optional ToSavePointName As String, Optional ByVal ReUs
         Execute "ROLLBACK"
         RaiseEvent RollbackTransComplete
     Else
-        Execute "ROLLBACK TO SAVEPOINT " & pQuoteId(sName)
-        Execute "RELEASE SAVEPOINT " & pQuoteId(sName)
+        Execute "ROLLBACK TO SAVEPOINT " & pvQuoteId(sName)
+        Execute "RELEASE SAVEPOINT " & pvQuoteId(sName)
         RaiseEvent RollbackToSavePointComplete(sName)
     End If
 End Sub
@@ -283,9 +283,9 @@ End Function
 Public Function Execute(SQL As String) As Boolean
     Dim lRc             As Long
 
-    lRc = pExec(SQL)
+    lRc = pvExec(SQL)
     If lRc <> SQLITE_OK Then
-        Err.Raise vbObjectError, "cConnection.Execute", pLastError()
+        Err.Raise vbObjectError, "cConnection.Execute", pvLastError()
     End If
     Execute = True
 End Function
@@ -307,7 +307,7 @@ Public Function GetBooleanString(ByVal B As Boolean) As String
 End Function
 
 Public Function LastDBError() As String
-    LastDBError = pLastError()
+    LastDBError = pvLastError()
 End Function
 
 Public Function GetSqliteErrStr(ByVal ResultCode As Long) As String
@@ -364,25 +364,25 @@ End Sub
 
 '--- private helpers ------------------------------------------------------
 
-Private Function pOpenDatabase(sFileName As String, ByVal lFlags As Long) As Boolean
+Private Function pvOpenDatabase(sFileName As String, ByVal lFlags As Long) As Boolean
     Dim baFile()        As Byte
     Dim lRc             As Long
 
-    pCloseDatabase
+    pvCloseDatabase
     baFile = ToUtf8Array(sFileName & vbNullChar)
     lRc = vbsqlite3_open_v2(VarPtr(baFile(0)), VarPtr(m_hDb), lFlags, 0)
     If lRc <> SQLITE_OK Then
-        pCloseDatabase
+        pvCloseDatabase
         Exit Function
     End If
     m_sFileName = sFileName
     If m_dblBusyTimeout > 0 Then
         Call vbsqlite3_busy_timeout(m_hDb, CLng(m_dblBusyTimeout * 1000))
     End If
-    pOpenDatabase = True
+    pvOpenDatabase = True
 End Function
 
-Private Sub pCloseDatabase()
+Private Sub pvCloseDatabase()
     If m_hDb <> 0 Then
         Call vbsqlite3_close_v2(m_hDb)
         m_hDb = 0
@@ -392,34 +392,18 @@ Private Sub pCloseDatabase()
     Loop
 End Sub
 
-Private Function pExec(sSql As String) As Long
+Private Function pvExec(sSql As String) As Long
     Dim baSql()         As Byte
 
     If m_hDb = 0 Then
-        pExec = SQLITE_MISUSE
+        pvExec = SQLITE_MISUSE
         Exit Function
     End If
     baSql = ToUtf8Array(sSql & vbNullChar)
-    pExec = vbsqlite3_exec(m_hDb, VarPtr(baSql(0)), 0, 0, 0)
+    pvExec = vbsqlite3_exec(m_hDb, VarPtr(baSql(0)), 0, 0, 0)
 End Function
 
-Private Function pGetScalarLong(sSql As String) As Long
-    Dim baSql()         As Byte
-    Dim hStmt           As LongPtr
-
-    If m_hDb = 0 Then
-        Exit Function
-    End If
-    baSql = ToUtf8Array(sSql & vbNullChar)
-    If vbsqlite3_prepare_v2(m_hDb, VarPtr(baSql(0)), -1, VarPtr(hStmt), 0) = SQLITE_OK Then
-        If vbsqlite3_step(hStmt) = SQLITE_ROW Then
-            pGetScalarLong = vbsqlite3_column_int(hStmt, 0)
-        End If
-        Call vbsqlite3_finalize(hStmt)
-    End If
-End Function
-
-Private Function pGetScalarText(sSql As String) As String
+Private Function pvGetScalarLong(sSql As String) As Long
     Dim baSql()         As Byte
     Dim hStmt           As LongPtr
 
@@ -429,33 +413,49 @@ Private Function pGetScalarText(sSql As String) As String
     baSql = ToUtf8Array(sSql & vbNullChar)
     If vbsqlite3_prepare_v2(m_hDb, VarPtr(baSql(0)), -1, VarPtr(hStmt), 0) = SQLITE_OK Then
         If vbsqlite3_step(hStmt) = SQLITE_ROW Then
-            pGetScalarText = FromUtf8Ptr(vbsqlite3_column_text(hStmt, 0))
+            pvGetScalarLong = vbsqlite3_column_int(hStmt, 0)
         End If
         Call vbsqlite3_finalize(hStmt)
     End If
 End Function
 
-Private Function pLastInsertId() As Variant
+Private Function pvGetScalarText(sSql As String) As String
+    Dim baSql()         As Byte
+    Dim hStmt           As LongPtr
+
     If m_hDb = 0 Then
-        pLastInsertId = CVar(0)
+        Exit Function
+    End If
+    baSql = ToUtf8Array(sSql & vbNullChar)
+    If vbsqlite3_prepare_v2(m_hDb, VarPtr(baSql(0)), -1, VarPtr(hStmt), 0) = SQLITE_OK Then
+        If vbsqlite3_step(hStmt) = SQLITE_ROW Then
+            pvGetScalarText = FromUtf8Ptr(vbsqlite3_column_text(hStmt, 0))
+        End If
+        Call vbsqlite3_finalize(hStmt)
+    End If
+End Function
+
+Private Function pvLastInsertId() As Variant
+    If m_hDb = 0 Then
+        pvLastInsertId = CVar(0)
         Exit Function
     End If
     '--- on x86 the API returns the raw int64 bits reinterpreted as Currency
     '--- (value * 10000), so scale back up through Decimal to recover it
 #If Win64 Then
-    pLastInsertId = vbsqlite3_last_insert_rowid(m_hDb)
+    pvLastInsertId = vbsqlite3_last_insert_rowid(m_hDb)
 #Else
-    pLastInsertId = CDec(vbsqlite3_last_insert_rowid(m_hDb)) * CDec(10000)
+    pvLastInsertId = CDec(vbsqlite3_last_insert_rowid(m_hDb)) * CDec(10000)
 #End If
 End Function
 
-Private Function pLastError() As String
+Private Function pvLastError() As String
     If m_hDb <> 0 Then
-        pLastError = FromUtf8Ptr(vbsqlite3_errmsg(m_hDb))
+        pvLastError = FromUtf8Ptr(vbsqlite3_errmsg(m_hDb))
     End If
 End Function
 
-Private Sub pPopTo(sName As String)
+Private Sub pvPopTo(sName As String)
     '--- drop stack frames down to and including the named savepoint
     Do While m_cTransactionStack.Count > 0
         If m_cTransactionStack.Item(m_cTransactionStack.Count) = sName Then
@@ -466,12 +466,12 @@ Private Sub pPopTo(sName As String)
     Loop
 End Sub
 
-Private Function pQuoteId(sName As String) As String
-    pQuoteId = """" & Replace(sName, """", """""") & """"
+Private Function pvQuoteId(sName As String) As String
+    pvQuoteId = """" & Replace(sName, """", """""") & """"
 End Function
 
-Private Function pQuoteStr(sText As String) As String
-    pQuoteStr = "'" & Replace(sText, "'", "''") & "'"
+Private Function pvQuoteStr(sText As String) As String
+    pvQuoteStr = "'" & Replace(sText, "'", "''") & "'"
 End Function
 
 Private Sub Class_Initialize()
@@ -481,5 +481,5 @@ Private Sub Class_Initialize()
 End Sub
 
 Private Sub Class_Terminate()
-    pCloseDatabase
+    pvCloseDatabase
 End Sub

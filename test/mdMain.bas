@@ -4,7 +4,7 @@ Option Explicit
 Private Declare Function lstrlenA Lib "kernel32" (ByVal lpString As LongPtr) As Long
 Private Declare Sub RtlMoveMemory Lib "kernel32" (ByVal Dst As LongPtr, ByVal Src As LongPtr, ByVal L As Long)
 
-Private Function PtrToStrA(ByVal p As LongPtr) As String
+Private Function pvPtrToStrA(ByVal p As LongPtr) As String
     Dim n As Long
     Dim b() As Byte
 
@@ -17,14 +17,14 @@ Private Function PtrToStrA(ByVal p As LongPtr) As String
     End If
     ReDim b(0 To n - 1)
     RtlMoveMemory VarPtr(b(0)), p, n
-    PtrToStrA = StrConv(b, vbUnicode)
+    pvPtrToStrA = StrConv(b, vbUnicode)
 End Function
 
-Private Function AscZ(ByVal s As String) As Byte()
-    AscZ = StrConv(s & vbNullChar, vbFromUnicode)
+Private Function pvAscZ(ByVal s As String) As Byte()
+    pvAscZ = StrConv(s & vbNullChar, vbFromUnicode)
 End Function
 
-Private Sub WriteResult(ByVal sText As String)
+Private Sub pvWriteResult(ByVal sText As String)
     Dim iFile As Integer
 
     iFile = FreeFile
@@ -42,11 +42,11 @@ Private Sub Main()
     Dim sql() As Byte
     Dim sOut As String
 
-    sOut = "libversion=" & PtrToStrA(vbsqlite3_libversion())
-    fn = AscZ(":memory:")
+    sOut = "libversion=" & pvPtrToStrA(vbsqlite3_libversion())
+    fn = pvAscZ(":memory:")
     rc = vbsqlite3_open(VarPtr(fn(0)), VarPtr(hDb))
     sOut = sOut & vbCrLf & "open rc=" & rc & " hDbNonZero=" & CBool(hDb <> 0)
-    sql = AscZ("SELECT 40+2")
+    sql = pvAscZ("SELECT 40+2")
     rc = vbsqlite3_prepare_v2(hDb, VarPtr(sql(0)), -1, VarPtr(hStmt), 0)
     sOut = sOut & vbCrLf & "prepare rc=" & rc
     rc = vbsqlite3_step(hStmt)
@@ -55,5 +55,5 @@ Private Sub Main()
     rc = vbsqlite3_finalize(hStmt)
     rc = vbsqlite3_close(hDb)
     sOut = sOut & vbCrLf & "close rc=" & rc
-    WriteResult sOut
+    pvWriteResult sOut
 End Sub
