@@ -205,66 +205,64 @@ The `va_list` variants (`sqlite3_vmprintf`, `sqlite3_vsnprintf`,
 Strings are **UTF-8**: callers pass a `LongPtr` to a UTF-8 byte buffer, never a
 VB `String` (which is UTF-16).
 
-## [test/](test/) — VB6 compile & run harness
+## [test/TestRunner.vbp](test/TestRunner.vbp) — ActiveX-DLL test runner
 
-A Std-EXE VB6 project that compiles `src\mdSqliteApi.bas` + `src\mdGlobals.bas`
-and exercises them at runtime, built and run headless with the OS's `VB6.EXE`
-(`/make ... /out`).
+An **ActiveX DLL** (`Type=OleDll`, project name `RC6SQLiteTest`) that compiles
+**all 26 classes + both shared modules** plus the test code, and exposes one
+public COM class, `cTestHost`, to drive the suite from PowerShell/VBScript. This
+is the single project going forward — the old `apitest` Std-EXE was removed (its
+API smoke-check is now covered by `cConnection.CreateAndInsert`). Current run:
+**8 tests / 33 checks, all PASS** against winsqlite3.dll 3.51.1.
 
-- [test/apitest.vbp](test/apitest.vbp) — Std-EXE, `Startup="Sub Main"`. Uses the
-  full field set VB6 writes (Command32, MajorVer, CompilationType, …); a stripped
-  vbp made `/make` mis-parse the module list. **Files must be CRLF** — LF made
-  VB6 drop modules ("Must have startup form or Sub Main()").
-- [test/mdMain.bas](test/mdMain.bas) — `Sub Main` opens `:memory:`, prepares
-  `SELECT 40+2`, steps, reads the column, closes; writes results to
-  `apitest_out.txt`. Includes a `LongPtr`→ANSI-string helper.
-
-Result (proves the StdCall declares are binary-correct — a wrong convention
-would corrupt the stack, not compute 42):
-
-```
-libversion=3.51.1
-open rc=0 hDbNonZero=True
-prepare rc=0
-step rc=100 (100=SQLITE_ROW) col0=42
-close rc=0
-```
-
-Build/run recipe (headless): `Start-Process VB6.EXE -ArgumentList '/make',
-<vbp>,'/out',<log> -Wait` — VB6 is a GUI-subsystem app, so the shell must wait
-on it explicitly, and the `/out` log is **append-mode**.
-
-## [test/TestRunner.vbp](test/TestRunner.vbp) — class test runner
-
-A single Std-EXE that compiles **all 26 classes + both shared modules** and runs
-a suite of tests against them, so the replacement can be developed test-first.
-Built/run headless like `apitest`. Current run: **8 tests / 33 checks, all
-PASS** (exercises the real `cConnection` against winsqlite3.dll 3.51.1).
-
-- [test/mdTestRunner.bas](test/mdTestRunner.bas) — the harness. `Sub Main` calls
-  one `RunXxxTests` per class; `TestBegin`/`TestEnd`/`TestErr` bracket each test
-  (own `On Error GoTo EH`, so one failure never aborts the rest);
-  `AssertTrue`/`AssertEqLng`/`AssertEqStr` record pass/fail and keep going.
-  Output goes to `test\testrun.log`.
+- [test/cTestHost.cls](test/cTestHost.cls) — public `MultiUse` class, the COM
+  entry point. `RunAll([OutputFile])` and `RunTests([Filter],[OutputFile])`
+  return the failed-test count; `Report`/`TestsRun`/`TestsFailed` properties
+  expose results. `Filter` = comma-separated, case-insensitive substrings of
+  test names; empty = all. `OutputFile` empty → `<dll folder>\testrun.log`.
+- [test/mdTestRunner.bas](test/mdTestRunner.bas) — the engine.
+  `TestReset`/`TestBegin`/`TestEnd`/`TestErr`/`TestFinish` +
+  `AssertTrue`/`AssertEqLng`/`AssertEqStr` + report buffer. `TestBegin(name)`
+  returns `False` when the name is filtered out, so each `Test_` sub starts with
+  `If Not TestBegin(name) Then Exit Sub` and traps its own errors — one
+  failing/skipped test never aborts the rest.
 - [test/mdConnectionTests.bas](test/mdConnectionTests.bas) — one standard module
-  **per class** holds that class's tests (`Test_*` subs + a public
-  `RunConnectionTests`). Add a new module + one line in `Main` for each class.
+  **per class** holds that class's `Test_*` subs + a public `RunXxxTests` entry
+  that `cTestHost.RunTests` calls. Add a new module + one call for each class.
+- [test/run_tests.vbs](test/run_tests.vbs) — convenience driver (see below).
 
-Two things the runner project needs that `apitest` did not:
+**Build (headless):** `Start-Process VB6.EXE -ArgumentList '/make',<vbp>,'/out',
+<log> -Wait` — VB6 is GUI-subsystem so the shell must wait; the `/out` log is
+append-mode. Building an ActiveX DLL **auto-registers** it on this machine
+(No/Project compatibility, `CompatibleMode=0`, so CLSIDs churn each build — the
+stable `RC6SQLiteTest.cTestHost` ProgID always resolves to the latest build).
 
-- **`Reference=…stdole2.tlb#OLE Automation`** in the vbp — the classes use
-  `IUnknown` (the `NewEnum` collection members); without the OLE Automation
-  reference VB6 reports *"User-defined type not defined"*.
-- **Class instancing = Private.** A Standard EXE only permits `Private` classes
-  (VB6 force-downgrades anything public with a warning). All 26 `.cls` were set
-  to `MultiUse = 0 / VB_Creatable = False / VB_Exposed = False`. This also fixed
-  a latent bug: the schema/child stubs had an **invalid** header (`MultiUse = -1`
-  with `VB_Creatable = False`) that loaded in no project type. **When the
-  ActiveX-DLL project is built, restore instancing**: the 8 creatable classes
-  (`cConnection`, `cRecordset`, `cMemDB`, `cConverter`, `cDBAccess`, `IFunction`,
-  `IAggregateFunction`, `ICollation`) → `MultiUse`; the other 18 →
-  `PublicNotCreatable`. `New` still works on `Private` classes within the project,
-  so the tests are unaffected.
+**Run (the DLL is x86 → use a 32-bit script host):**
+
+```
+C:\Windows\SysWOW64\cscript.exe //nologo test\run_tests.vbs [/out:log] [/filter:tokens]
+```
+
+`run_tests.vbs` does `CreateObject("RC6SQLiteTest.cTestHost")`, calls
+`RunTests(filter, out)`, echoes `.Report`, and `WScript.Quit`s the failed count.
+Equivalently from 32-bit PowerShell:
+`& $env:WINDIR\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -Command "(New-Object -ComObject RC6SQLiteTest.cTestHost).RunAll('out.log')"`.
+NB: invoke `cscript` with the call operator, not `Start-Process` — the latter
+mangled the `/out:C:\…` argument.
+
+**Two project requirements** beyond a bare vbp: the
+`Reference=…stdole2.tlb#OLE Automation` line (the classes use `IUnknown` for the
+`NewEnum` members — without it VB6 reports *"User-defined type not defined"*),
+and correct **class instancing** (restored below).
+
+### Class instancing (restored for the ActiveX DLL)
+
+The 8 creatable classes (`cConnection`, `cRecordset`, `cMemDB`, `cConverter`,
+`cDBAccess`, `IFunction`, `IAggregateFunction`, `ICollation`) are `MultiUse`
+(`MultiUse = -1 / VB_Creatable = True / VB_Exposed = True`); the other 18 are
+`PublicNotCreatable` (`MultiUse = 0 / VB_Creatable = False / VB_Exposed = True`).
+This also fixed a latent stub bug: the schema/child classes had an **invalid**
+header (`MultiUse = -1` with `VB_Creatable = False`) that loaded in no project
+type. `cTestHost` is `MultiUse`.
 
 ## Status / next steps
 
@@ -274,22 +272,18 @@ Two things the runner project needs that `apitest` did not:
       declared (StdCall, verified) plus core constants; UTF-8 helpers in
       `mdGlobals.bas`.
 - [x] VB6 (x86) + tB dual-target compatibility of `mdSqliteApi.bas`.
-- [x] Std-EXE test harness compiles AND runs against winsqlite3.dll
-      (open/prepare/step/column/close all verified, SQLite 3.51.1).
 - [x] UTF-8 string helpers in `mdGlobals.bas`: `ToUtf8Array`/`FromUtf8Array`
       plus `FromUtf8Ptr` (null-terminated UTF-8 `char*` → VB String, over
       `lstrlenA`+`MultiByteToWideChar`) — needed by `errmsg`/`column_text`.
 - [x] `cConnection` core implemented (see section below).
-- [x] Class test runner: single Std-EXE (`TestRunner.vbp`) with all 26 classes
-      + shared modules + one test module per class; 8 tests / 33 checks PASS
+- [x] ActiveX-DLL project (`RC6SQLiteTest`) wiring all 26 classes + modules
+      together; class instancing restored (8 `MultiUse`, 18 `PublicNotCreatable`).
+- [x] Class test runner driven over COM by `cTestHost` (PowerShell/VBScript),
+      with test-name filter and output-file options; 8 tests / 33 checks PASS
       against winsqlite3.dll (see the TestRunner section above).
 - [ ] Implement `cRecordset` (query/navigation), then the object-factory
       members of `cConnection` that return it (`OpenRecordset`/`GetRs`/
       `OpenSchema`) and `cCommand`/`cSelectCommand`/`cCursor`.
-- [ ] Add a `.twinproj`/project file wiring the classes together. All class
-      references are now project types or intrinsics (`cCollection` → the
-      intrinsic `VBA.Collection`), so an ActiveX-DLL project no longer needs
-      an external RC6 reference to compile.
 
 ## [src/cConnection.cls](src/cConnection.cls) — connection wrapper
 

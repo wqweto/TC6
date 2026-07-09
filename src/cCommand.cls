@@ -10,7 +10,7 @@ Attribute VB_Name = "cCommand"
 Attribute VB_GlobalNameSpace = False
 Attribute VB_Creatable = False
 Attribute VB_PredeclaredId = False
-Attribute VB_Exposed = False
+Attribute VB_Exposed = True
 Option Explicit
 
 Public Property Get ActiveConnection() As cConnection

@@ -18,8 +18,8 @@ End Sub
 Private Sub Test_Version()
     Dim oCnn            As cConnection
 
+    If Not TestBegin("cConnection.Version") Then Exit Sub
     On Error GoTo EH
-    TestBegin "cConnection.Version"
     Set oCnn = New cConnection
     AssertTrue Len(oCnn.Version()) > 0, "Version is not empty"
     AssertEqStr Left$(oCnn.Version(), 2), "3.", "Version starts with major 3"
@@ -32,8 +32,8 @@ End Sub
 Private Sub Test_CreateAndInsert()
     Dim oCnn            As cConnection
 
+    If Not TestBegin("cConnection.CreateAndInsert") Then Exit Sub
     On Error GoTo EH
-    TestBegin "cConnection.CreateAndInsert"
     Set oCnn = New cConnection
     AssertTrue oCnn.CreateNewDB(":memory:"), "CreateNewDB(:memory:) succeeds"
     AssertTrue oCnn.DBHdl <> 0, "DBHdl is non-zero after open"
@@ -53,8 +53,8 @@ End Sub
 Private Sub Test_Pragmas()
     Dim oCnn            As cConnection
 
+    If Not TestBegin("cConnection.Pragmas") Then Exit Sub
     On Error GoTo EH
-    TestBegin "cConnection.Pragmas"
     Set oCnn = New cConnection
     AssertTrue oCnn.CreateNewDB(":memory:"), "CreateNewDB(:memory:) succeeds"
     AssertTrue oCnn.PageSize > 0, "PageSize is positive"
@@ -72,8 +72,8 @@ End Sub
 Private Sub Test_Transactions()
     Dim oCnn            As cConnection
 
+    If Not TestBegin("cConnection.Transactions") Then Exit Sub
     On Error GoTo EH
-    TestBegin "cConnection.Transactions"
     Set oCnn = New cConnection
     AssertTrue oCnn.CreateNewDB(":memory:"), "CreateNewDB(:memory:) succeeds"
     oCnn.Execute "CREATE TABLE t(v INTEGER)"
@@ -97,8 +97,8 @@ End Sub
 Private Sub Test_Savepoints()
     Dim oCnn            As cConnection
 
+    If Not TestBegin("cConnection.Savepoints") Then Exit Sub
     On Error GoTo EH
-    TestBegin "cConnection.Savepoints"
     Set oCnn = New cConnection
     AssertTrue oCnn.CreateNewDB(":memory:"), "CreateNewDB(:memory:) succeeds"
     oCnn.Execute "CREATE TABLE t(v INTEGER)"
@@ -122,8 +122,8 @@ Private Sub Test_ExecuteRaisesOnBadSql()
     Dim oCnn            As cConnection
     Dim bRaised         As Boolean
 
+    If Not TestBegin("cConnection.ExecuteRaisesOnBadSql") Then Exit Sub
     On Error GoTo EH
-    TestBegin "cConnection.ExecuteRaisesOnBadSql"
     Set oCnn = New cConnection
     AssertTrue oCnn.CreateNewDB(":memory:"), "CreateNewDB(:memory:) succeeds"
     On Error Resume Next
@@ -140,8 +140,8 @@ End Sub
 Private Sub Test_ErrorInfo()
     Dim oCnn            As cConnection
 
+    If Not TestBegin("cConnection.ErrorInfo") Then Exit Sub
     On Error GoTo EH
-    TestBegin "cConnection.ErrorInfo"
     Set oCnn = New cConnection
     AssertTrue oCnn.CreateNewDB(":memory:"), "CreateNewDB(:memory:) succeeds"
     AssertTrue Len(oCnn.GetSqliteErrStr(1)) > 0, "GetSqliteErrStr(SQLITE_ERROR) not empty"
@@ -160,8 +160,8 @@ Private Sub Test_DateHelpers()
     Dim oCnn            As cConnection
     Dim dSample         As Date
 
+    If Not TestBegin("cConnection.DateHelpers") Then Exit Sub
     On Error GoTo EH
-    TestBegin "cConnection.DateHelpers"
     Set oCnn = New cConnection
     dSample = DateSerial(2020, 1, 2) + TimeSerial(3, 4, 5)
     AssertEqStr oCnn.GetDateString(dSample), "2020-01-02 03:04:05", "GetDateString"
