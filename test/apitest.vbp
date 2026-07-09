@@ -1,6 +1,7 @@
 Type=Exe
 Module=mdMain; mdMain.bas
-Module=mdWinApi; ..\src\mdWinApi.bas
+Module=mdSqliteApi; ..\src\mdSqliteApi.bas
+Module=mdGlobals; ..\src\mdGlobals.bas
 Startup="Sub Main"
 ExeName32="apitest.exe"
 Command32=""

@@ -42,18 +42,18 @@ Private Sub Main()
     Dim sql() As Byte
     Dim sOut As String
 
-    sOut = "libversion=" & PtrToStrA(sqlite3_libversion())
+    sOut = "libversion=" & PtrToStrA(vbsqlite3_libversion())
     fn = AscZ(":memory:")
-    rc = sqlite3_open(VarPtr(fn(0)), VarPtr(hDb))
+    rc = vbsqlite3_open(VarPtr(fn(0)), VarPtr(hDb))
     sOut = sOut & vbCrLf & "open rc=" & rc & " hDbNonZero=" & CBool(hDb <> 0)
     sql = AscZ("SELECT 40+2")
-    rc = sqlite3_prepare_v2(hDb, VarPtr(sql(0)), -1, VarPtr(hStmt), 0)
+    rc = vbsqlite3_prepare_v2(hDb, VarPtr(sql(0)), -1, VarPtr(hStmt), 0)
     sOut = sOut & vbCrLf & "prepare rc=" & rc
-    rc = sqlite3_step(hStmt)
-    v = sqlite3_column_int(hStmt, 0)
+    rc = vbsqlite3_step(hStmt)
+    v = vbsqlite3_column_int(hStmt, 0)
     sOut = sOut & vbCrLf & "step rc=" & rc & " (100=SQLITE_ROW) col0=" & v
-    rc = sqlite3_finalize(hStmt)
-    rc = sqlite3_close(hDb)
+    rc = vbsqlite3_finalize(hStmt)
+    rc = vbsqlite3_close(hDb)
     sOut = sOut & vbCrLf & "close rc=" & rc
     WriteResult sOut
 End Sub
