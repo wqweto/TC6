@@ -24,7 +24,6 @@ Attribute VB_Exposed = True
 '=========================================================================
 Option Explicit
 
-Private m_oRs                       As cRecordset
 Private m_cItems                    As VBA.Collection
 
 Public Property Get Count() As Variant
@@ -65,12 +64,22 @@ Friend Sub frInit(oRs As cRecordset)
     Dim lCol            As Long
     Dim oField          As cField
 
-    Set m_oRs = oRs
     Set m_cItems = New VBA.Collection
     For lCol = 0 To oRs.frFieldCount - 1
         Set oField = New cField
         oField.frInit oRs, lCol
         pvAdd oField, oRs.frFieldName(lCol)
+    Next
+End Sub
+
+Friend Sub frTerminate()
+    Dim oField          As cField
+
+    If m_cItems Is Nothing Then
+        Exit Sub
+    End If
+    For Each oField In m_cItems
+        oField.frTerminate
     Next
 End Sub
 

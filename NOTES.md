@@ -354,6 +354,13 @@ by `cConnection.OpenRecordset`/`OpenSchema` (`frOpen`), or via the public
 - **Read helpers**: `ValueMatrix(row, col)` (Get), `GetRows` (ADO-style
   `(field, record)` array; `TransPosed` and a comma-separated field subset
   supported).
+- **No reference cycle**: the recordset owns `cFields`, which owns the
+  `cField`s. Their back-references to the recordset are **weak** (raw `ObjPtr`,
+  dereferenced via `mdGlobals.ObjectFromPtr` — `__vbaObjSetAddref` from a
+  pointer). A strong back-ref would be a cycle that keeps the recordset (and
+  its whole result matrix) alive forever. Proven by the `NoReferenceCycle`
+  test: a module-level `g_lLiveRecordsets` (bumped in `Class_Initialize`/
+  `Terminate`) returns to baseline after a recordset goes out of scope.
 - **Left raising `Not implemented`**: the write surface (`AddNew`/`Delete`/
   `UpdateBatch`/`ResetChanges`/`ValueMatrix` set/`cField.Value` set), `Sort`/
   `Find*`, `Content*`, `ToJSONUTF8`, `GetRowsWithHeaders`, ADO interop.

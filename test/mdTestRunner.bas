@@ -123,16 +123,16 @@ End Sub
 
 Private Function pvMatchesFilter(sName As String) As Boolean
     Dim asTok()         As String
-    Dim i               As Long
+    Dim lIdx            As Long
 
     If Len(m_sFilter) = 0 Then
         pvMatchesFilter = True
         Exit Function
     End If
     asTok = Split(m_sFilter, ",")
-    For i = LBound(asTok) To UBound(asTok)
-        If Len(Trim$(asTok(i))) > 0 Then
-            If InStr(1, sName, Trim$(asTok(i)), vbTextCompare) > 0 Then
+    For lIdx = LBound(asTok) To UBound(asTok)
+        If Len(Trim$(asTok(lIdx))) > 0 Then
+            If InStr(1, sName, Trim$(asTok(lIdx)), vbTextCompare) > 0 Then
                 pvMatchesFilter = True
                 Exit Function
             End If

@@ -233,8 +233,8 @@ Public Function GetRows(Optional ByVal RowCount As Long = -1, Optional ByVal Sta
     Dim lLast           As Long
     Dim lNumRows        As Long
     Dim aOut()          As Variant
-    Dim i               As Long
-    Dim j               As Long
+    Dim lRow            As Long
+    Dim lCol            As Long
 
     aCol = pvResolveColumns(FieldListCommaSeparated, lNumCols)
     lFirst = StartIdxZeroBased
@@ -256,16 +256,16 @@ Public Function GetRows(Optional ByVal RowCount As Long = -1, Optional ByVal Sta
     '--- default orientation matches ADO GetRows: (fieldIdx, rowIdx)
     If TransPosed Then
         ReDim aOut(0 To lNumRows - 1, 0 To lNumCols - 1)
-        For i = 0 To lNumRows - 1
-            For j = 0 To lNumCols - 1
-                aOut(i, j) = m_vData(aCol(j), lFirst + i)
+        For lRow = 0 To lNumRows - 1
+            For lCol = 0 To lNumCols - 1
+                aOut(lRow, lCol) = m_vData(aCol(lCol), lFirst + lRow)
             Next
         Next
     Else
         ReDim aOut(0 To lNumCols - 1, 0 To lNumRows - 1)
-        For j = 0 To lNumCols - 1
-            For i = 0 To lNumRows - 1
-                aOut(j, i) = m_vData(aCol(j), lFirst + i)
+        For lCol = 0 To lNumCols - 1
+            For lRow = 0 To lNumRows - 1
+                aOut(lCol, lRow) = m_vData(aCol(lCol), lFirst + lRow)
             Next
         Next
     End If
@@ -312,12 +312,12 @@ Friend Function frFieldName(ByVal lCol As Long) As String
 End Function
 
 Friend Function frFieldIndex(sName As String) As Long
-    Dim i               As Long
+    Dim lIdx            As Long
 
     frFieldIndex = -1
-    For i = 0 To m_lFieldCount - 1
-        If StrComp(m_aFieldName(i), sName, vbTextCompare) = 0 Then
-            frFieldIndex = i
+    For lIdx = 0 To m_lFieldCount - 1
+        If StrComp(m_aFieldName(lIdx), sName, vbTextCompare) = 0 Then
+            frFieldIndex = lIdx
             Exit Function
         End If
     Next
@@ -392,12 +392,22 @@ Private Sub pvClear()
     m_lCurRow = -1
     Erase m_vData
     Erase m_aFieldName
-    Set m_oFields = Nothing
+    pvReleaseFields
 End Sub
 
 Private Sub pvEnsureFields()
     Set m_oFields = New cFields
     m_oFields.frInit Me
+End Sub
+
+Private Sub pvReleaseFields()
+    '--- invalidate the current fields (on ReQuery or terminate) so any
+    '--- externally-held cField fails safely rather than reading the next
+    '--- result set or, after terminate, freed memory
+    If Not m_oFields Is Nothing Then
+        m_oFields.frTerminate
+        Set m_oFields = Nothing
+    End If
 End Sub
 
 Private Function pvReadColumn(ByVal hStmt As LongPtr, ByVal lCol As Long) As Variant
@@ -451,8 +461,8 @@ End Function
 Private Function pvResolveColumns(sList As String, lNumCols As Long) As Long()
     Dim aRet()          As Long
     Dim asName()        As String
-    Dim i               As Long
     Dim lIdx            As Long
+    Dim lCol            As Long
 
     lNumCols = 0
     If Len(Trim$(sList)) = 0 Then
@@ -460,17 +470,17 @@ Private Function pvResolveColumns(sList As String, lNumCols As Long) As Long()
             Exit Function
         End If
         ReDim aRet(0 To m_lFieldCount - 1)
-        For i = 0 To m_lFieldCount - 1
-            aRet(i) = i
+        For lIdx = 0 To m_lFieldCount - 1
+            aRet(lIdx) = lIdx
         Next
         lNumCols = m_lFieldCount
     Else
         asName = Split(sList, ",")
         ReDim aRet(0 To UBound(asName))
-        For i = 0 To UBound(asName)
-            lIdx = frFieldIndex(Trim$(asName(i)))
-            If lIdx >= 0 Then
-                aRet(lNumCols) = lIdx
+        For lIdx = 0 To UBound(asName)
+            lCol = frFieldIndex(Trim$(asName(lIdx)))
+            If lCol >= 0 Then
+                aRet(lNumCols) = lCol
                 lNumCols = lNumCols + 1
             End If
         Next
@@ -484,4 +494,13 @@ End Function
 
 Private Sub pvNotImpl(sName As String)
     Err.Raise vbObjectError, "cRecordset." & sName, "Not implemented yet"
+End Sub
+
+Private Sub Class_Initialize()
+    g_lLiveRecordsets = g_lLiveRecordsets + 1
+End Sub
+
+Private Sub Class_Terminate()
+    pvReleaseFields
+    g_lLiveRecordsets = g_lLiveRecordsets - 1
 End Sub

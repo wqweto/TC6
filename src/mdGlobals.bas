@@ -7,9 +7,14 @@ Option Explicit
 '--- for WideCharToMultiByte
 Private Const CP_UTF8                       As Long = 65001
 
+Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
 Private Declare Function WideCharToMultiByte Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, ByVal lpWideCharStr As Long, ByVal cchWideChar As Long, lpMultiByteStr As Any, ByVal cchMultiByte As Long, ByVal lpDefaultChar As Long, ByVal lpUsedDefaultChar As Long) As Long
 Private Declare Function MultiByteToWideChar Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, lpMultiByteStr As Any, ByVal cchMultiByte As Long, ByVal lpWideCharStr As Long, ByVal cchWideChar As Long) As Long
 Private Declare Function lstrlenA Lib "kernel32" (ByVal lpString As LongPtr) As Long
+Private Declare Function vbaObjSetAddref Lib "msvbvm60" Alias "__vbaObjSetAddref" (oDest As Any, ByVal lSrcPtr As LongPtr) As Long
+
+'--- live-instance counter (leak/cycle diagnostic, see cRecordset)
+Public g_lLiveRecordsets            As Long
 
 Public Function ToUtf8Array(sText As String) As Byte()
     Dim baRetVal()      As Byte
@@ -48,4 +53,8 @@ Public Function FromUtf8Ptr(ByVal lpUtf8 As LongPtr) As String
         lSize = MultiByteToWideChar(CP_UTF8, 0, ByVal lpUtf8, lLen, StrPtr(FromUtf8Ptr), lLen)
         FromUtf8Ptr = Left$(FromUtf8Ptr, lSize)
     End If
+End Function
+
+Public Function ObjectFromPtr(ByVal pObj As LongPtr) As IUnknown
+    Call vbaObjSetAddref(ObjectFromPtr, pObj)
 End Function

@@ -30,7 +30,7 @@ Public Enum FieldType
     VB_Time_AutoConverted = 9
 End Enum
 
-Private m_oRs                       As cRecordset
+Private m_pRs                       As LongPtr
 Private m_lCol                      As Long
 
 Public Property Get IndexInFieldList() As Long
@@ -38,7 +38,7 @@ Public Property Get IndexInFieldList() As Long
 End Property
 
 Public Property Get Name() As String
-    Name = m_oRs.frFieldName(m_lCol)
+    Name = pvRs().frFieldName(m_lCol)
 End Property
 
 Public Property Get DefaultValue() As String
@@ -75,30 +75,30 @@ Public Property Get UniqueConstraint() As Boolean
 End Property
 
 Public Property Get ColumnType() As FieldType
-    ColumnType = pvValueType(m_oRs.frCellValue(m_lCol))
+    ColumnType = pvValueType(pvRs().frCellValue(m_lCol))
 End Property
 
 Public Property Get DefinedSize() As Long
 End Property
 
 Public Property Get ActualSize() As Long
-    ActualSize = pvValueSize(m_oRs.frCellValue(m_lCol))
+    ActualSize = pvValueSize(pvRs().frCellValue(m_lCol))
 End Property
 
 Public Property Get Changed() As Boolean
 End Property
 
 Public Property Get UnderlyingValue() As Variant
-    UnderlyingValue = m_oRs.frCellValue(m_lCol)
+    UnderlyingValue = pvRs().frCellValue(m_lCol)
 End Property
 
 Public Property Get OriginalValue() As Variant
-    OriginalValue = m_oRs.frCellValue(m_lCol)
+    OriginalValue = pvRs().frCellValue(m_lCol)
 End Property
 
 Public Property Get Value() As Variant
 Attribute Value.VB_UserMemId = 0
-    Value = m_oRs.frCellValue(m_lCol)
+    Value = pvRs().frCellValue(m_lCol)
 End Property
 
 Public Property Let Value(RHS As Variant)
@@ -106,9 +106,17 @@ Public Property Let Value(RHS As Variant)
 End Property
 
 Friend Sub frInit(oRs As cRecordset, ByVal lCol As Long)
-    Set m_oRs = oRs
+    m_pRs = ObjPtr(oRs)
     m_lCol = lCol
 End Sub
+
+Friend Sub frTerminate()
+    m_pRs = 0
+End Sub
+
+Private Function pvRs() As cRecordset
+    Set pvRs = ObjectFromPtr(m_pRs)
+End Function
 
 Private Function pvValueType(vValue As Variant) As FieldType
     '--- infer the SQLite storage class from the materialised VB value

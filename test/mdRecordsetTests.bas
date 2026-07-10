@@ -13,6 +13,9 @@ Public Sub RunRecordsetTests()
     Test_DuplicateFieldNames
     Test_Empty
     Test_OpenSchema
+    Test_NoReferenceCycle
+    Test_FieldOutlivesRecordset
+    Test_FieldInvalidAfterReQuery
 End Sub
 
 Private Function pvSeededDb() As cConnection
@@ -179,6 +182,96 @@ Private Sub Test_Empty()
 EH:
     TestErr
 End Sub
+
+Private Sub Test_NoReferenceCycle()
+    Dim lBefore         As Long
+
+    If Not TestBegin("cRecordset.NoReferenceCycle") Then Exit Sub
+    On Error GoTo EH
+    lBefore = g_lLiveRecordsets
+    pvMakeAndDropRecordset
+    '--- if cField/cFields held strong back-references the recordset would
+    '--- never terminate and the live count would stay elevated
+    AssertEqLng g_lLiveRecordsets, lBefore, "recordset instance freed after use (no cycle)"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub pvMakeAndDropRecordset()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+    Dim oField          As cField
+    Dim vValue          As Variant
+
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name FROM t ORDER BY id")
+    '--- materialise cFields + cField and exercise the weak-ref deref path
+    Set oField = oRs.Fields(0)
+    vValue = oField.Value
+    '--- all locals released on return; the recordset must terminate here
+End Sub
+
+Private Sub Test_FieldOutlivesRecordset()
+    Dim oField          As cField
+    Dim vValue          As Variant
+    Dim bRaised         As Boolean
+
+    If Not TestBegin("cRecordset.FieldOutlivesRecordset") Then Exit Sub
+    On Error GoTo EH
+    '--- oField survives the recordset; frTerminate must have zeroed its weak
+    '--- pointer so this fails safely instead of dereferencing freed memory
+    Set oField = pvOrphanField()
+    On Error Resume Next
+    vValue = oField.Value
+    bRaised = (Err.Number <> 0)
+    On Error GoTo EH
+    AssertTrue bRaised, "field access after its recordset is freed raises (no crash)"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_FieldInvalidAfterReQuery()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+    Dim oOldField       As cField
+    Dim vValue          As Variant
+    Dim bRaised         As Boolean
+
+    If Not TestBegin("cRecordset.FieldInvalidAfterReQuery") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id FROM t ORDER BY id")
+    Set oOldField = oRs.Fields(0)
+    AssertEqLng CLng(oOldField.Value), 1, "field reads its cell before ReQuery"
+    oRs.ReQuery
+    '--- ReQuery rebuilds the fields; the field held from the prior load must
+    '--- be invalidated, not silently bound to the new result set
+    On Error Resume Next
+    vValue = oOldField.Value
+    bRaised = (Err.Number <> 0)
+    On Error GoTo EH
+    AssertTrue bRaised, "field held across ReQuery is invalidated (raises)"
+    AssertEqLng CLng(oRs.Fields(0).Value), 1, "fresh field after ReQuery works"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Function pvOrphanField() As cField
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id FROM t ORDER BY id")
+    Set pvOrphanField = oRs.Fields(0)
+    '--- oRs (and oCnn) released on return -> cRecordset.Class_Terminate ->
+    '--- cFields.frTerminate -> cField.frTerminate clears the weak pointer
+End Function
 
 Private Sub Test_OpenSchema()
     Dim oCnn            As cConnection
