@@ -308,8 +308,9 @@ type. `cTestHost` is `MultiUse`.
       `cColumns`/`cColumn` + `cIndexes`/`cIndex`, `cTriggers`/`cTrigger`,
       `cViews`/`cView`, wired from `cConnection.DataBases` (see section
       below).
-- [ ] `cRecordset` Sort/Find, Content serialization, ADO interop, JSON
-      export.
+- [x] `cRecordset` `Sort`/`SortRefresh` + `Find*` — in-memory multi-key
+      sort and ADO-style criterion scan (see the cRecordset section).
+- [ ] `cRecordset` Content serialization, ADO interop, JSON export.
 - [ ] `cMemDB`, `CopyDatabase` (`sqlite3_backup_*`), UDF/collation
       registration (`IFunction`/`IAggregateFunction`/`ICollation`
       callbacks + `cUDFMethods`).
@@ -485,8 +486,23 @@ by `cConnection.OpenRecordset`/`OpenSchema` (`frOpen`), or via the public
   `ResetChanges(ResetAll/DeletesOnly/InsertsOnly/UpdatesOnly)` discards
   pending changes (restoring deleted-row snapshots); `ContainsChanges` and
   `cField.Changed`/`OriginalValue` report pending state.
-- **Left raising `Not implemented`**: `Sort`/`Find*`, `Content*`,
-  `ToJSONUTF8`, `GetRowsWithHeaders`, ADO interop.
+- **Sort / Find**: `Sort = "col1 [DESC], col2 …"` (also `[bracketed]` names)
+  applies immediately and `SortRefresh` re-applies after data changes — a
+  stable multi-key quicksort over a row-index array, then one permute pass
+  that moves the matrix **and** the pending-changes state together; the
+  cursor follows its row (raising `Move`). Value ordering follows SQLite:
+  NULL < numeric (`CDec` compare) < text (binary) < blob. `FindFirst`/
+  `FindNext`/`FindPrevious`/`FindLast` scan with an ADO-style criterion:
+  `field op literal` with ops `=`, `<>`, `<`, `<=`, `>`, `>=`, `LIKE`
+  (SQLite `%`/`_` wildcards, case-insensitive) and `IS [NOT] NULL`;
+  literals are `'strings'` (`''` escape), numbers (locale-independent
+  `Val`) or `NULL`. On a hit the cursor moves there (`Move` event) and True
+  returns; on a miss the position stays. `DistinctNullValues:=True`
+  (default) = SQL three-valued logic (`= NULL` never matches); `False`
+  treats NULLs as regular equal values (`= NULL` matches null cells, `<>`
+  counts them).
+- **Left raising `Not implemented`**: `Content*`, `ToJSONUTF8`,
+  `GetRowsWithHeaders`, ADO interop.
 
 **Gotcha:** `cField`'s `FieldType` enum (`SQLite_INTEGER`…) collides
 case-insensitively with `mdSqliteApi`'s `SQLITE_INTEGER`… constants. VB6 only

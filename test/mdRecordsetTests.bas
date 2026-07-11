@@ -21,6 +21,8 @@ Public Sub RunRecordsetTests()
     Test_AddNewInsert
     Test_DeleteBatch
     Test_ResetChanges
+    Test_Sort
+    Test_Find
 End Sub
 
 Private Function pvSeededDb() As cConnection
@@ -349,6 +351,80 @@ Private Sub Test_ResetChanges()
     '--- DB never touched
     Set oRs = oCnn.GetRs("SELECT COUNT(*) AS n FROM t")
     AssertEqLng CLng(oRs.Fields("n").Value), 3, "DB unchanged by discarded edits"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_Sort()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+
+    If Not TestBegin("cRecordset.Sort") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    oRs.MoveFirst
+    AssertEqStr CStr(oRs.Fields("name").Value), "alpha", "positioned on alpha before sort"
+    oRs.Sort = "name DESC"
+    AssertEqStr CStr(oRs.ValueMatrix(0, 1)), "gamma", "first row after DESC sort"
+    AssertEqStr CStr(oRs.ValueMatrix(2, 1)), "alpha", "last row after DESC sort"
+    AssertEqLng oRs.AbsolutePosition, 2, "cursor followed its row"
+    AssertEqStr CStr(oRs.Fields("name").Value), "alpha", "still on alpha after sort"
+    '--- pending changes travel with their rows through a sort
+    oRs.Fields("score").Value = 9.9
+    oRs.Sort = "score"
+    oRs.UpdateBatch
+    Set oRs = oCnn.GetRs("SELECT score FROM t WHERE name = ?", "alpha")
+    AssertTrue oRs.Fields("score").Value = 9.9, "modified cell persisted after sort"
+    '--- NULLs sort first; SortRefresh re-applies after data changes
+    oCnn.ExecCmd "INSERT INTO t(name, score) VALUES(NULL, 0.5)"
+    Set oRs = oCnn.OpenRecordset("SELECT id, name FROM t")
+    oRs.Sort = "name"
+    AssertTrue IsNull(oRs.ValueMatrix(0, 1)), "NULL sorts first ascending"
+    oRs.Fields(1).Value = "zzz"
+    oRs.SortRefresh
+    AssertEqStr CStr(oRs.ValueMatrix(oRs.RecordCount - 1, 1)), "zzz", "SortRefresh re-applies current sort"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_Find()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+
+    If Not TestBegin("cRecordset.Find") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    AssertTrue oRs.FindFirst("name = 'beta'"), "FindFirst equality hit"
+    AssertEqLng CLng(oRs.Fields("id").Value), 2, "positioned on beta"
+    AssertTrue Not oRs.FindFirst("name = 'zzz'"), "FindFirst miss returns False"
+    AssertEqLng CLng(oRs.Fields("id").Value), 2, "miss leaves the position unchanged"
+    AssertTrue oRs.FindFirst("score > 1.5"), "FindFirst numeric comparison"
+    AssertEqLng CLng(oRs.Fields("id").Value), 2, "first score above 1.5"
+    AssertTrue oRs.FindNext("score > 1.5"), "FindNext continues past current"
+    AssertEqLng CLng(oRs.Fields("id").Value), 3, "next score above 1.5"
+    AssertTrue Not oRs.FindNext("score > 1.5"), "FindNext exhausts"
+    AssertTrue oRs.FindLast("score < 3"), "FindLast scans backwards"
+    AssertEqLng CLng(oRs.Fields("id").Value), 2, "last score below 3"
+    AssertTrue oRs.FindPrevious("score < 2"), "FindPrevious from current"
+    AssertEqLng CLng(oRs.Fields("id").Value), 1, "previous score below 2"
+    AssertTrue oRs.FindFirst("name LIKE 'g%'"), "LIKE with SQLite wildcards"
+    AssertEqLng CLng(oRs.Fields("id").Value), 3, "LIKE matched gamma"
+    AssertTrue oRs.FindFirst("[name] = 'alpha'"), "bracketed field name"
+    '--- NULL semantics: IS NULL always works, = NULL needs non-distinct nulls
+    oCnn.ExecCmd "INSERT INTO t(name, score) VALUES(NULL, 7)"
+    oRs.ReQuery
+    AssertTrue oRs.FindFirst("name IS NULL"), "IS NULL matches the null row"
+    AssertEqLng CLng(oRs.Fields("id").Value), 4, "positioned on the null row"
+    AssertTrue Not oRs.FindFirst("name = NULL"), "= NULL never matches with distinct nulls (default)"
+    AssertTrue oRs.FindFirst("name = NULL", False), "= NULL matches with DistinctNullValues=False"
+    AssertTrue oRs.FindFirst("name <> 'alpha'", False), "<> treats null as a regular value when non-distinct"
+    AssertEqLng CLng(oRs.Fields("id").Value), 2, "first non-alpha row"
     TestEnd
     Exit Sub
 EH:

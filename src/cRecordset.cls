@@ -20,9 +20,11 @@ Attribute VB_Exposed = True
 ' batched write surface (field writes, AddNew/Delete/UpdateBatch/
 ' ResetChanges) - changes are tracked in memory and written back by
 ' UpdateBatch inside a savepoint, addressing rows by the origin table's
-' PK columns (see pvAnalyzeUpdatable). Sort/Find, Content serialization,
-' ADO interop and JSON export are not implemented yet and raise;
-' unimplemented read-only members return defaults.
+' PK columns (see pvAnalyzeUpdatable). Sort/SortRefresh reorder the matrix
+' in memory (multi-key, SQLite type ordering, cursor follows its row) and
+' Find* scan it with an ADO-style criterion (see pvParseCriterion).
+' Content serialization, ADO interop and JSON export are not implemented
+' yet and raise; unimplemented read-only members return defaults.
 '
 ' NOTE: a facade-over-cRowset split (strong references, orphaned fields
 ' stay readable) was considered and REJECTED - not going to implement. The
@@ -50,6 +52,18 @@ Private Enum eRowState
     ROW_CLEAN = 0
     ROW_MODIFIED = 1
     ROW_NEW = 2
+End Enum
+
+Private Enum eFindOp
+    OP_EQ
+    OP_NE
+    OP_LT
+    OP_LE
+    OP_GT
+    OP_GE
+    OP_LIKE
+    OP_ISNULL
+    OP_ISNOTNULL
 End Enum
 
 Private m_oConnection               As cConnection
@@ -153,6 +167,7 @@ End Property
 
 Public Property Let Sort(ByVal RHS As String)
     m_sSort = RHS
+    pvApplySort
 End Property
 
 Public Property Get Fields() As cFields
@@ -312,23 +327,23 @@ Public Sub MovePrevious()
 End Sub
 
 Public Sub SortRefresh()
-    pvNotImpl "SortRefresh"
+    pvApplySort
 End Sub
 
 Public Function FindFirst(Criterion As String, Optional ByVal DistinctNullValues As Boolean = True) As Boolean
-    pvNotImpl "FindFirst"
+    FindFirst = pvFindMove(0, 1, Criterion, DistinctNullValues)
 End Function
 
 Public Function FindNext(Criterion As String, Optional ByVal DistinctNullValues As Boolean = True) As Boolean
-    pvNotImpl "FindNext"
+    FindNext = pvFindMove(m_lCurRow + 1, 1, Criterion, DistinctNullValues)
 End Function
 
 Public Function FindPrevious(Criterion As String, Optional ByVal DistinctNullValues As Boolean = True) As Boolean
-    pvNotImpl "FindPrevious"
+    FindPrevious = pvFindMove(m_lCurRow - 1, -1, Criterion, DistinctNullValues)
 End Function
 
 Public Function FindLast(Criterion As String, Optional ByVal DistinctNullValues As Boolean = True) As Boolean
-    pvNotImpl "FindLast"
+    FindLast = pvFindMove(m_lRecordCount - 1, -1, Criterion, DistinctNullValues)
 End Function
 
 Public Sub OpenRecordset(Optional SQL As String, Optional Cnn As Variant, Optional ByVal ReadOnly As Boolean)
@@ -1008,6 +1023,387 @@ Private Sub pvClearWriteState()
         Set m_cDeleted = New VBA.Collection
     End If
 End Sub
+
+Private Sub pvApplySort()
+    Dim alCols()        As Long
+    Dim abDesc()        As Boolean
+    Dim lKeys           As Long
+    Dim alIdx()         As Long
+    Dim lRow            As Long
+
+    If Len(Trim$(m_sSort)) = 0 Or m_lRecordCount = 0 Then
+        Exit Sub
+    End If
+    pvParseSort alCols, abDesc, lKeys
+    If lKeys = 0 Then
+        Exit Sub
+    End If
+    ReDim alIdx(0 To m_lRecordCount - 1)
+    For lRow = 0 To m_lRecordCount - 1
+        alIdx(lRow) = lRow
+    Next
+    pvQuickSortRows alIdx, 0, m_lRecordCount - 1, alCols, abDesc, lKeys
+    pvPermuteRows alIdx
+End Sub
+
+Private Sub pvParseSort(alCols() As Long, abDesc() As Boolean, lKeys As Long)
+    Dim asTok()         As String
+    Dim lIdx            As Long
+    Dim sName           As String
+    Dim sDir            As String
+    Dim lPos            As Long
+
+    asTok = Split(m_sSort, ",")
+    ReDim alCols(0 To UBound(asTok))
+    ReDim abDesc(0 To UBound(asTok))
+    lKeys = 0
+    For lIdx = 0 To UBound(asTok)
+        sName = Trim$(asTok(lIdx))
+        If Len(sName) > 0 Then
+            sDir = vbNullString
+            If Left$(sName, 1) = "[" Then
+                lPos = InStr(sName, "]")
+                If lPos = 0 Then
+                    Err.Raise 5, "cRecordset.Sort", "Invalid sort expression"
+                End If
+                sDir = Trim$(Mid$(sName, lPos + 1))
+                sName = Mid$(sName, 2, lPos - 2)
+            Else
+                lPos = InStr(sName, " ")
+                If lPos > 0 Then
+                    sDir = Trim$(Mid$(sName, lPos + 1))
+                    sName = Left$(sName, lPos - 1)
+                End If
+            End If
+            alCols(lKeys) = frFieldIndex(sName)
+            If alCols(lKeys) < 0 Then
+                Err.Raise vbObjectError, "cRecordset.Sort", "Unknown field '" & sName & "'"
+            End If
+            abDesc(lKeys) = (StrComp(sDir, "DESC", vbTextCompare) = 0)
+            lKeys = lKeys + 1
+        End If
+    Next
+End Sub
+
+Private Sub pvQuickSortRows(alIdx() As Long, ByVal lLo As Long, ByVal lHi As Long, alCols() As Long, abDesc() As Boolean, ByVal lKeys As Long)
+    Dim lLeft           As Long
+    Dim lRight          As Long
+    Dim lPivot          As Long
+    Dim lTemp           As Long
+
+    lLeft = lLo
+    lRight = lHi
+    lPivot = alIdx((lLo + lHi) \ 2)
+    Do While lLeft <= lRight
+        Do While pvCompareRows(alIdx(lLeft), lPivot, alCols, abDesc, lKeys) < 0
+            lLeft = lLeft + 1
+        Loop
+        Do While pvCompareRows(alIdx(lRight), lPivot, alCols, abDesc, lKeys) > 0
+            lRight = lRight - 1
+        Loop
+        If lLeft <= lRight Then
+            lTemp = alIdx(lLeft)
+            alIdx(lLeft) = alIdx(lRight)
+            alIdx(lRight) = lTemp
+            lLeft = lLeft + 1
+            lRight = lRight - 1
+        End If
+    Loop
+    If lLo < lRight Then
+        pvQuickSortRows alIdx, lLo, lRight, alCols, abDesc, lKeys
+    End If
+    If lLeft < lHi Then
+        pvQuickSortRows alIdx, lLeft, lHi, alCols, abDesc, lKeys
+    End If
+End Sub
+
+Private Function pvCompareRows(ByVal lRow1 As Long, ByVal lRow2 As Long, alCols() As Long, abDesc() As Boolean, ByVal lKeys As Long) As Long
+    Dim lIdx            As Long
+    Dim lCmp            As Long
+
+    For lIdx = 0 To lKeys - 1
+        lCmp = pvCompareValues(m_vData(alCols(lIdx), lRow1), m_vData(alCols(lIdx), lRow2))
+        If abDesc(lIdx) Then
+            lCmp = -lCmp
+        End If
+        If lCmp <> 0 Then
+            pvCompareRows = lCmp
+            Exit Function
+        End If
+    Next
+    '--- tie-break on the original row order to keep the sort stable
+    pvCompareRows = Sgn(lRow1 - lRow2)
+End Function
+
+Private Sub pvPermuteRows(alIdx() As Long)
+    Dim vNew()          As Variant
+    Dim vOrigNew()      As Variant
+    Dim abDirtyNew()    As Boolean
+    Dim alStateNew()    As Long
+    Dim lRow            As Long
+    Dim lCol            As Long
+    Dim lNewCur         As Long
+
+    ReDim vNew(0 To m_lFieldCount - 1, 0 To UBound(m_vData, 2))
+    lNewCur = m_lCurRow
+    For lRow = 0 To m_lRecordCount - 1
+        For lCol = 0 To m_lFieldCount - 1
+            vNew(lCol, lRow) = m_vData(lCol, alIdx(lRow))
+        Next
+        If alIdx(lRow) = m_lCurRow Then
+            lNewCur = lRow
+        End If
+    Next
+    m_vData = vNew
+    If m_bWriteState Then
+        ReDim vOrigNew(0 To m_lFieldCount - 1, 0 To UBound(m_vOrig, 2))
+        ReDim abDirtyNew(0 To m_lFieldCount - 1, 0 To UBound(m_abDirty, 2))
+        ReDim alStateNew(0 To UBound(m_alRowState))
+        For lRow = 0 To m_lRecordCount - 1
+            For lCol = 0 To m_lFieldCount - 1
+                vOrigNew(lCol, lRow) = m_vOrig(lCol, alIdx(lRow))
+                abDirtyNew(lCol, lRow) = m_abDirty(lCol, alIdx(lRow))
+            Next
+            alStateNew(lRow) = m_alRowState(alIdx(lRow))
+        Next
+        m_vOrig = vOrigNew
+        m_abDirty = abDirtyNew
+        m_alRowState = alStateNew
+    End If
+    '--- the cursor follows its row to the row's new position
+    If m_lCurRow >= 0 And m_lCurRow < m_lRecordCount Then
+        If lNewCur <> m_lCurRow Then
+            m_lCurRow = lNewCur
+            RaiseEvent Move(m_lCurRow)
+        End If
+    End If
+End Sub
+
+Private Function pvFindMove(ByVal lFrom As Long, ByVal lStep As Long, sCriterion As String, ByVal bDistinctNull As Boolean) As Boolean
+    Dim lCol            As Long
+    Dim lOp             As Long
+    Dim vValue          As Variant
+    Dim lRow            As Long
+
+    If Not pvParseCriterion(sCriterion, lCol, lOp, vValue) Then
+        Err.Raise 5, "cRecordset.Find", "Invalid criterion '" & sCriterion & "'"
+    End If
+    lRow = lFrom
+    Do While lRow >= 0 And lRow < m_lRecordCount
+        If pvMatchValue(m_vData(lCol, lRow), lOp, vValue, bDistinctNull) Then
+            '--- found: move there; not found leaves the position unchanged
+            AbsolutePosition = lRow
+            pvFindMove = True
+            Exit Function
+        End If
+        lRow = lRow + lStep
+    Loop
+End Function
+
+Private Function pvParseCriterion(sCriterion As String, lCol As Long, lOp As Long, vValue As Variant) As Boolean
+    Dim sText           As String
+    Dim sName           As String
+    Dim lPos            As Long
+
+    sText = Trim$(sCriterion)
+    '--- field name: [bracketed] or up to the first space/operator char
+    If Left$(sText, 1) = "[" Then
+        lPos = InStr(sText, "]")
+        If lPos = 0 Then
+            Exit Function
+        End If
+        sName = Mid$(sText, 2, lPos - 2)
+        sText = LTrim$(Mid$(sText, lPos + 1))
+    Else
+        lPos = 1
+        Do While lPos <= Len(sText)
+            If InStr(" =<>", Mid$(sText, lPos, 1)) > 0 Then
+                Exit Do
+            End If
+            lPos = lPos + 1
+        Loop
+        sName = Left$(sText, lPos - 1)
+        sText = LTrim$(Mid$(sText, lPos))
+    End If
+    lCol = frFieldIndex(sName)
+    If lCol < 0 Then
+        Exit Function
+    End If
+    '--- operator
+    If Left$(sText, 2) = ">=" Then
+        lOp = OP_GE
+        sText = Mid$(sText, 3)
+    ElseIf Left$(sText, 2) = "<=" Then
+        lOp = OP_LE
+        sText = Mid$(sText, 3)
+    ElseIf Left$(sText, 2) = "<>" Then
+        lOp = OP_NE
+        sText = Mid$(sText, 3)
+    ElseIf Left$(sText, 1) = "=" Then
+        lOp = OP_EQ
+        sText = Mid$(sText, 2)
+    ElseIf Left$(sText, 1) = ">" Then
+        lOp = OP_GT
+        sText = Mid$(sText, 2)
+    ElseIf Left$(sText, 1) = "<" Then
+        lOp = OP_LT
+        sText = Mid$(sText, 2)
+    ElseIf StrComp(Left$(sText, 5), "LIKE ", vbTextCompare) = 0 Then
+        lOp = OP_LIKE
+        sText = Mid$(sText, 6)
+    ElseIf StrComp(Left$(sText, 3), "IS ", vbTextCompare) = 0 Then
+        sText = Trim$(Mid$(sText, 4))
+        If StrComp(sText, "NULL", vbTextCompare) = 0 Then
+            lOp = OP_ISNULL
+        ElseIf StrComp(sText, "NOT NULL", vbTextCompare) = 0 Then
+            lOp = OP_ISNOTNULL
+        Else
+            Exit Function
+        End If
+        pvParseCriterion = True
+        Exit Function
+    Else
+        Exit Function
+    End If
+    '--- literal: 'string' ('' escapes a quote), NULL, or a number
+    sText = Trim$(sText)
+    If Left$(sText, 1) = "'" Then
+        If Len(sText) < 2 Or Right$(sText, 1) <> "'" Then
+            Exit Function
+        End If
+        vValue = Replace(Mid$(sText, 2, Len(sText) - 2), "''", "'")
+    ElseIf StrComp(sText, "NULL", vbTextCompare) = 0 Then
+        vValue = Null
+    ElseIf IsNumeric(sText) Then
+        vValue = Val(sText)
+    Else
+        Exit Function
+    End If
+    pvParseCriterion = True
+End Function
+
+Private Function pvMatchValue(vCell As Variant, ByVal lOp As Long, vValue As Variant, ByVal bDistinctNull As Boolean) As Boolean
+    Dim lCmp            As Long
+
+    Select Case lOp
+    Case OP_ISNULL
+        pvMatchValue = IsNull(vCell)
+    Case OP_ISNOTNULL
+        pvMatchValue = Not IsNull(vCell)
+    Case OP_LIKE
+        If Not IsNull(vCell) Then
+            pvMatchValue = LCase$(CStr(vCell)) Like pvLikePattern(LCase$(CStr(vValue)))
+        End If
+    Case Else
+        If IsNull(vCell) Or IsNull(vValue) Then
+            '--- SQL three-valued logic (never matches) unless
+            '--- DistinctNullValues=False treats Null as a regular value
+            If Not bDistinctNull Then
+                If IsNull(vCell) And IsNull(vValue) Then
+                    pvMatchValue = (lOp = OP_EQ Or lOp = OP_LE Or lOp = OP_GE)
+                Else
+                    pvMatchValue = (lOp = OP_NE)
+                End If
+            End If
+        Else
+            lCmp = pvCompareValues(vCell, vValue)
+            Select Case lOp
+            Case OP_EQ
+                pvMatchValue = (lCmp = 0)
+            Case OP_NE
+                pvMatchValue = (lCmp <> 0)
+            Case OP_LT
+                pvMatchValue = (lCmp < 0)
+            Case OP_LE
+                pvMatchValue = (lCmp <= 0)
+            Case OP_GT
+                pvMatchValue = (lCmp > 0)
+            Case OP_GE
+                pvMatchValue = (lCmp >= 0)
+            End Select
+        End If
+    End Select
+End Function
+
+Private Function pvLikePattern(sPattern As String) As String
+    Dim lIdx            As Long
+    Dim sChar           As String
+
+    '--- SQLite wildcards (% _) to VB Like (* ?), escaping VB specials
+    For lIdx = 1 To Len(sPattern)
+        sChar = Mid$(sPattern, lIdx, 1)
+        Select Case sChar
+        Case "%"
+            pvLikePattern = pvLikePattern & "*"
+        Case "_"
+            pvLikePattern = pvLikePattern & "?"
+        Case "*", "?", "#", "["
+            pvLikePattern = pvLikePattern & "[" & sChar & "]"
+        Case Else
+            pvLikePattern = pvLikePattern & sChar
+        End Select
+    Next
+End Function
+
+Private Function pvCompareValues(v1 As Variant, v2 As Variant) As Long
+    Dim lRank1          As Long
+    Dim lRank2          As Long
+
+    '--- SQLite type ordering: NULL < numeric < text < blob
+    lRank1 = pvTypeRank(v1)
+    lRank2 = pvTypeRank(v2)
+    If lRank1 <> lRank2 Then
+        pvCompareValues = Sgn(lRank1 - lRank2)
+        Exit Function
+    End If
+    Select Case lRank1
+    Case 1
+        If CDec(v1) < CDec(v2) Then
+            pvCompareValues = -1
+        ElseIf CDec(v1) > CDec(v2) Then
+            pvCompareValues = 1
+        End If
+    Case 2
+        pvCompareValues = StrComp(CStr(v1), CStr(v2), vbBinaryCompare)
+    Case 3
+        pvCompareValues = pvCompareBlobs(v1, v2)
+    End Select
+End Function
+
+Private Function pvTypeRank(vValue As Variant) As Long
+    Select Case VarType(vValue)
+    Case vbNull, vbEmpty
+        pvTypeRank = 0
+    Case vbString
+        pvTypeRank = 2
+    Case vbByte + vbArray
+        pvTypeRank = 3
+    Case Else
+        pvTypeRank = 1
+    End Select
+End Function
+
+Private Function pvCompareBlobs(v1 As Variant, v2 As Variant) As Long
+    Dim baBlob1()       As Byte
+    Dim baBlob2()       As Byte
+    Dim lLen1           As Long
+    Dim lLen2           As Long
+    Dim lIdx            As Long
+
+    baBlob1 = v1
+    baBlob2 = v2
+    On Error Resume Next
+    lLen1 = UBound(baBlob1) + 1
+    lLen2 = UBound(baBlob2) + 1
+    On Error GoTo 0
+    For lIdx = 0 To IIf(lLen1 < lLen2, lLen1, lLen2) - 1
+        If baBlob1(lIdx) <> baBlob2(lIdx) Then
+            pvCompareBlobs = Sgn(CLng(baBlob1(lIdx)) - baBlob2(lIdx))
+            Exit Function
+        End If
+    Next
+    pvCompareBlobs = Sgn(lLen1 - lLen2)
+End Function
 
 Private Sub pvNotImpl(sName As String)
     Err.Raise vbObjectError, "cRecordset." & sName, "Not implemented yet"
