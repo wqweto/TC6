@@ -14,15 +14,15 @@ Attribute VB_Name = "mdTestRunner"
 '=========================================================================
 Option Explicit
 
-Private m_sLog                        As String
-Private m_sFilter                     As String
-Private m_sCurrentTest                As String
-Private m_lChecks                     As Long
-Private m_lChecksFailed               As Long
-Private m_lTestsRun                   As Long
-Private m_lTestsFailed                As Long
-Private m_lTestsSkipped               As Long
-Private m_bCurrentFailed              As Boolean
+Private m_sLog                      As String
+Private m_sFilter                   As String
+Private m_sCurrentTest              As String
+Private m_lChecks                   As Long
+Private m_lChecksFailed             As Long
+Private m_lTestsRun                 As Long
+Private m_lTestsFailed              As Long
+Private m_lTestsSkipped             As Long
+Private m_bCurrentFailed            As Boolean
 
 Public Sub TestReset(sFilter As String)
     m_sLog = vbNullString
@@ -122,17 +122,17 @@ Public Sub TestWriteReport(sFile As String)
 End Sub
 
 Private Function pvMatchesFilter(sName As String) As Boolean
-    Dim asTok()         As String
+    Dim aTok()          As String
     Dim lIdx            As Long
 
     If Len(m_sFilter) = 0 Then
         pvMatchesFilter = True
         Exit Function
     End If
-    asTok = Split(m_sFilter, ",")
-    For lIdx = LBound(asTok) To UBound(asTok)
-        If Len(Trim$(asTok(lIdx))) > 0 Then
-            If InStr(1, sName, Trim$(asTok(lIdx)), vbTextCompare) > 0 Then
+    aTok = Split(m_sFilter, ",")
+    For lIdx = LBound(aTok) To UBound(aTok)
+        If Len(Trim$(aTok(lIdx))) > 0 Then
+            If InStr(1, sName, Trim$(aTok(lIdx)), vbTextCompare) > 0 Then
                 pvMatchesFilter = True
                 Exit Function
             End If

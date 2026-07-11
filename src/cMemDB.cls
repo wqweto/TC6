@@ -30,10 +30,10 @@ Public Property Set Cnn(RHS As cConnection)
 End Property
 
 Public Function GetRs(ByVal SQL As String, ParamArray P() As Variant) As cRecordset
-    Dim vParams()       As Variant
+    Dim aParams()       As Variant
 
-    vParams = P
-    Set GetRs = m_oCnn.frGetRs(SQL, vParams)
+    aParams = P
+    Set GetRs = m_oCnn.frGetRs(SQL, aParams)
 End Function
 
 Public Sub CreateTable(TableName As String, Optional FieldDefs As Collection)
@@ -91,10 +91,10 @@ Public Sub Exec(SQL As String)
 End Sub
 
 Public Sub ExecCmd(ByVal SQL As String, ParamArray P() As Variant)
-    Dim vParams()       As Variant
+    Dim aParams()       As Variant
 
-    vParams = P
-    m_oCnn.frExecCmd SQL, vParams
+    aParams = P
+    m_oCnn.frExecCmd SQL, aParams
 End Sub
 
 Public Function CreateCommand(SQL As String) As cCommand
@@ -149,7 +149,7 @@ Private Sub pvCreateTableFromRs(ByVal oSrc As cRecordset, sTable As String, ByVa
     Dim sType           As String
     Dim lRow            As Long
     Dim lCol            As Long
-    Dim vParams()       As Variant
+    Dim aParams()       As Variant
 
     '--- column definitions from the source recordset's field metadata
     For Each oField In oSrc.Fields
@@ -176,12 +176,12 @@ Private Sub pvCreateTableFromRs(ByVal oSrc As cRecordset, sTable As String, ByVa
     End If
     m_oCnn.Execute "CREATE TABLE " & QuoteIdentifier(sTable) & " (" & sDefs & ")"
     If oSrc.RecordCount > 0 Then
-        ReDim vParams(0 To oSrc.Fields.Count - 1)
+        ReDim aParams(0 To oSrc.Fields.Count - 1)
         For lRow = 0 To oSrc.RecordCount - 1
             For lCol = 0 To oSrc.Fields.Count - 1
-                vParams(lCol) = oSrc.ValueMatrix(lRow, lCol)
+                aParams(lCol) = oSrc.ValueMatrix(lRow, lCol)
             Next
-            m_oCnn.frExecCmd "INSERT INTO " & QuoteIdentifier(sTable) & " (" & sCols & ") VALUES (" & sVals & ")", vParams
+            m_oCnn.frExecCmd "INSERT INTO " & QuoteIdentifier(sTable) & " (" & sCols & ") VALUES (" & sVals & ")", aParams
         Next
     End If
 End Sub

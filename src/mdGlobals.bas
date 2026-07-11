@@ -61,6 +61,17 @@ Public Function FromUtf8Ptr(ByVal lpUtf8 As LongPtr) As String
     End If
 End Function
 
+Public Function FromUtf8PtrLen(ByVal lpUtf8 As LongPtr, ByVal lLen As Long) As String
+    Dim lSize           As Long
+
+    If lpUtf8 = 0 Or lLen <= 0 Then
+        Exit Function
+    End If
+    FromUtf8PtrLen = String$(lLen, 0)
+    lSize = MultiByteToWideChar(CP_UTF8, 0, ByVal lpUtf8, lLen, StrPtr(FromUtf8PtrLen), lLen)
+    FromUtf8PtrLen = Left$(FromUtf8PtrLen, lSize)
+End Function
+
 Public Function ObjectFromPtr(ByVal pObj As LongPtr) As IUnknown
     Call vbaObjSetAddref(ObjectFromPtr, pObj)
 End Function

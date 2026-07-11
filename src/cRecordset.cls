@@ -76,7 +76,7 @@ Private m_lFieldCount               As Long
 Private m_lRecordCount              As Long
 Private m_lCurRow                   As Long
 Private m_aFieldName()              As String
-Private m_vData()                   As Variant
+Private m_aData()                   As Variant
 '--- per-column origin metadata (captured on every open, see cField)
 Private m_aOrigColumn()             As String
 Private m_aOrigTable()              As String
@@ -87,14 +87,14 @@ Private m_cColMeta                  As VBA.Collection
 Private m_bUpdatable                As Boolean
 Private m_sOrigDb                   As String
 Private m_sOrigTable                As String
-Private m_alPkCols()                As Long
+Private m_aPkCols()                 As Long
 Private m_lPkCount                  As Long
 Private m_lAutoPkCol                As Long
 '--- pending-changes tracking (lazy, see pvEnsureWriteState)
 Private m_bWriteState               As Boolean
-Private m_vOrig()                   As Variant
-Private m_abDirty()                 As Boolean
-Private m_alRowState()              As Long
+Private m_aOriginal()               As Variant
+Private m_aDirty()                  As Boolean
+Private m_aRowState()               As Long
 Private m_cDeleted                  As VBA.Collection
 
 Public Property Get ContainsChanges() As Boolean
@@ -108,7 +108,7 @@ Public Property Get ContainsChanges() As Boolean
     End If
     If m_bWriteState Then
         For lRow = 0 To m_lRecordCount - 1
-            If m_alRowState(lRow) <> ROW_CLEAN Then
+            If m_aRowState(lRow) <> ROW_CLEAN Then
                 ContainsChanges = True
                 Exit Property
             End If
@@ -233,25 +233,25 @@ Public Sub AddNew()
     pvEnsureWriteState
     pvEnsureRowCapacity m_lRecordCount + 1
     For lCol = 0 To m_lFieldCount - 1
-        m_vData(lCol, m_lRecordCount) = Null
-        m_abDirty(lCol, m_lRecordCount) = False
+        m_aData(lCol, m_lRecordCount) = Null
+        m_aDirty(lCol, m_lRecordCount) = False
     Next
     '--- RC6 semantics: fill the INTEGER PK with a time-based unique id
     If m_bAutoCreateUniqueID64 And m_lAutoPkCol >= 0 Then
-        m_vData(m_lAutoPkCol, m_lRecordCount) = CreateUniqueID64()
+        m_aData(m_lAutoPkCol, m_lRecordCount) = CreateUniqueID64()
     End If
-    m_alRowState(m_lRecordCount) = ROW_NEW
+    m_aRowState(m_lRecordCount) = ROW_NEW
     m_lRecordCount = m_lRecordCount + 1
     m_lCurRow = m_lRecordCount - 1
     RaiseEvent AddNew(m_lCurRow)
 End Sub
 
 Public Sub Delete()
-    Dim vEntry()        As Variant
-    Dim vRow()          As Variant
-    Dim vOrig()         As Variant
-    Dim abDirty()       As Boolean
-    Dim vPk()           As Variant
+    Dim aEntry()        As Variant
+    Dim aRow()          As Variant
+    Dim aOrig()         As Variant
+    Dim aDirty()        As Boolean
+    Dim aPk()           As Variant
     Dim lCol            As Long
     Dim lPkIdx          As Long
 
@@ -262,26 +262,26 @@ Public Sub Delete()
     pvEnsureWriteState
     '--- a pending insert just vanishes; existing rows queue a DELETE and keep
     '--- a full snapshot so ResetChanges can restore them faithfully
-    If m_alRowState(m_lCurRow) <> ROW_NEW Then
-        ReDim vEntry(0 To 4)
-        ReDim vRow(0 To m_lFieldCount - 1)
-        ReDim vOrig(0 To m_lFieldCount - 1)
-        ReDim abDirty(0 To m_lFieldCount - 1)
+    If m_aRowState(m_lCurRow) <> ROW_NEW Then
+        ReDim aEntry(0 To 4)
+        ReDim aRow(0 To m_lFieldCount - 1)
+        ReDim aOrig(0 To m_lFieldCount - 1)
+        ReDim aDirty(0 To m_lFieldCount - 1)
         For lCol = 0 To m_lFieldCount - 1
-            vRow(lCol) = m_vData(lCol, m_lCurRow)
-            vOrig(lCol) = m_vOrig(lCol, m_lCurRow)
-            abDirty(lCol) = m_abDirty(lCol, m_lCurRow)
+            aRow(lCol) = m_aData(lCol, m_lCurRow)
+            aOrig(lCol) = m_aOriginal(lCol, m_lCurRow)
+            aDirty(lCol) = m_aDirty(lCol, m_lCurRow)
         Next
-        ReDim vPk(0 To m_lPkCount - 1)
+        ReDim aPk(0 To m_lPkCount - 1)
         For lPkIdx = 0 To m_lPkCount - 1
-            vPk(lPkIdx) = pvPkWhereValue(m_lCurRow, lPkIdx)
+            aPk(lPkIdx) = pvPkWhereValue(m_lCurRow, lPkIdx)
         Next
-        vEntry(0) = vRow
-        vEntry(1) = vPk
-        vEntry(2) = m_alRowState(m_lCurRow)
-        vEntry(3) = abDirty
-        vEntry(4) = vOrig
-        m_cDeleted.Add vEntry
+        aEntry(0) = aRow
+        aEntry(1) = aPk
+        aEntry(2) = m_aRowState(m_lCurRow)
+        aEntry(3) = aDirty
+        aEntry(4) = aOrig
+        m_cDeleted.Add aEntry
     End If
     pvRemoveRow m_lCurRow
     RaiseEvent Delete(m_lCurRow)
@@ -301,7 +301,7 @@ Public Sub UpdateBatch()
         pvBatchDelete vElem
     Next
     For lRow = 0 To m_lRecordCount - 1
-        Select Case m_alRowState(lRow)
+        Select Case m_aRowState(lRow)
         Case ROW_MODIFIED
             pvBatchUpdate lRow
         Case ROW_NEW
@@ -409,14 +409,14 @@ Public Function GetRows(Optional ByVal RowCount As Long = -1, Optional ByVal Sta
         ReDim aOut(0 To lNumRows - 1, 0 To lNumCols - 1)
         For lRow = 0 To lNumRows - 1
             For lCol = 0 To lNumCols - 1
-                aOut(lRow, lCol) = m_vData(aCol(lCol), lFirst + lRow)
+                aOut(lRow, lCol) = m_aData(aCol(lCol), lFirst + lRow)
             Next
         Next
     Else
         ReDim aOut(0 To lNumCols - 1, 0 To lNumRows - 1)
         For lCol = 0 To lNumCols - 1
             For lRow = 0 To lNumRows - 1
-                aOut(lCol, lRow) = m_vData(aCol(lCol), lFirst + lRow)
+                aOut(lCol, lRow) = m_aData(aCol(lCol), lFirst + lRow)
             Next
         Next
     End If
@@ -441,7 +441,7 @@ Public Sub ResetChanges(Optional ByVal WhichChanges As ResetEnum = ResetAll)
     '--- pending inserts: drop the appended rows
     If WhichChanges = ResetAll Or WhichChanges = ResetInsertsOnly Then
         For lRow = m_lRecordCount - 1 To 0 Step -1
-            If m_alRowState(lRow) = ROW_NEW Then
+            If m_aRowState(lRow) = ROW_NEW Then
                 pvRemoveRow lRow
             End If
         Next
@@ -457,15 +457,15 @@ Public Sub ResetChanges(Optional ByVal WhichChanges As ResetEnum = ResetAll)
     '--- pending updates: restore each dirty cell's original
     If WhichChanges = ResetAll Or WhichChanges = ResetUpdatesOnly Then
         For lRow = 0 To m_lRecordCount - 1
-            If m_alRowState(lRow) = ROW_MODIFIED Then
+            If m_aRowState(lRow) = ROW_MODIFIED Then
                 For lCol = 0 To m_lFieldCount - 1
-                    If m_abDirty(lCol, lRow) Then
-                        m_vData(lCol, lRow) = m_vOrig(lCol, lRow)
-                        m_abDirty(lCol, lRow) = False
-                        m_vOrig(lCol, lRow) = Empty
+                    If m_aDirty(lCol, lRow) Then
+                        m_aData(lCol, lRow) = m_aOriginal(lCol, lRow)
+                        m_aDirty(lCol, lRow) = False
+                        m_aOriginal(lCol, lRow) = Empty
                     End If
                 Next
-                m_alRowState(lRow) = ROW_CLEAN
+                m_aRowState(lRow) = ROW_CLEAN
             End If
         Next
     End If
@@ -489,7 +489,7 @@ Friend Sub frOpen(oCnn As cConnection, sSql As String, ByVal bReadOnly As Boolea
     pvLoad
 End Sub
 
-Friend Sub frOpenParams(oCnn As cConnection, sSql As String, vParams() As Variant)
+Friend Sub frOpenParams(oCnn As cConnection, sSql As String, aParams() As Variant)
     Dim hStmt           As LongPtr
     Dim lIdx            As Long
 
@@ -497,15 +497,17 @@ Friend Sub frOpenParams(oCnn As cConnection, sSql As String, vParams() As Varian
     m_sSql = sSql
     hStmt = pvPrepare(sSql)
     On Error GoTo EH
-    For lIdx = LBound(vParams) To UBound(vParams)
-        If BindVariant(hStmt, lIdx - LBound(vParams) + 1, vParams(lIdx)) <> SQLITE_OK Then
+    For lIdx = LBound(aParams) To UBound(aParams)
+        If BindVariant(hStmt, lIdx - LBound(aParams) + 1, aParams(lIdx)) <> SQLITE_OK Then
             Err.Raise vbObjectError, "cRecordset", m_oConnection.LastDBError()
         End If
     Next
+    '--- pvMaterialize finalizes the statement on all paths incl. raising
+    On Error GoTo 0
     pvMaterialize hStmt
     Exit Sub
 EH:
-    '--- pvMaterialize would have finalized; a bind error must not leak it
+    '--- a bind error must not leak the statement
     Call vbsqlite3_finalize(hStmt)
     Err.Raise Err.Number, Err.Source, Err.Description
 End Sub
@@ -545,14 +547,14 @@ Friend Function frCellValue(ByVal lCol As Long) As Variant
     If m_lCurRow < 0 Or m_lCurRow >= m_lRecordCount Then
         Err.Raise vbObjectError, "cRecordset", "No current row (BOF or EOF)"
     End If
-    frCellValue = m_vData(lCol, m_lCurRow)
+    frCellValue = m_aData(lCol, m_lCurRow)
 End Function
 
 Friend Function frCellValueAt(ByVal lRow As Long, ByVal lCol As Long) As Variant
     If lRow < 0 Or lRow >= m_lRecordCount Or lCol < 0 Or lCol >= m_lFieldCount Then
         Err.Raise 9
     End If
-    frCellValueAt = m_vData(lCol, lRow)
+    frCellValueAt = m_aData(lCol, lRow)
 End Function
 
 Friend Sub frSetCellValue(ByVal lCol As Long, vValue As Variant)
@@ -569,28 +571,28 @@ Friend Sub frSetCellValueAt(ByVal lRow As Long, ByVal lCol As Long, vValue As Va
     pvCheckWritable lCol
     pvEnsureWriteState
     '--- first change to an existing row's cell captures the original value
-    If m_alRowState(lRow) <> ROW_NEW Then
-        If Not m_abDirty(lCol, lRow) Then
-            m_vOrig(lCol, lRow) = m_vData(lCol, lRow)
-            m_abDirty(lCol, lRow) = True
+    If m_aRowState(lRow) <> ROW_NEW Then
+        If Not m_aDirty(lCol, lRow) Then
+            m_aOriginal(lCol, lRow) = m_aData(lCol, lRow)
+            m_aDirty(lCol, lRow) = True
         End If
-        m_alRowState(lRow) = ROW_MODIFIED
+        m_aRowState(lRow) = ROW_MODIFIED
     End If
-    m_vData(lCol, lRow) = vValue
+    m_aData(lCol, lRow) = vValue
     RaiseEvent FieldChange(lRow, lCol)
 End Sub
 
 Friend Function frCellDirty(ByVal lCol As Long) As Boolean
     If m_bWriteState And m_lCurRow >= 0 And m_lCurRow < m_lRecordCount Then
         If lCol >= 0 And lCol < m_lFieldCount Then
-            frCellDirty = m_abDirty(lCol, m_lCurRow)
+            frCellDirty = m_aDirty(lCol, m_lCurRow)
         End If
     End If
 End Function
 
 Friend Function frCellOriginal(ByVal lCol As Long) As Variant
     If frCellDirty(lCol) Then
-        frCellOriginal = m_vOrig(lCol, m_lCurRow)
+        frCellOriginal = m_aOriginal(lCol, m_lCurRow)
     Else
         frCellOriginal = frCellValue(lCol)
     End If
@@ -668,6 +670,7 @@ Private Sub pvMaterialize(ByVal hStmt As LongPtr, Optional ByVal bFinalize As Bo
     Dim lCol            As Long
     Dim lRow            As Long
     Dim lCap            As Long
+    Dim lRc             As Long
 
     m_lFieldCount = vbsqlite3_column_count(hStmt)
     lCap = 16
@@ -676,25 +679,33 @@ Private Sub pvMaterialize(ByVal hStmt As LongPtr, Optional ByVal bFinalize As Bo
         For lCol = 0 To m_lFieldCount - 1
             m_aFieldName(lCol) = FromUtf8Ptr(vbsqlite3_column_name(hStmt, lCol))
         Next
-        ReDim m_vData(0 To m_lFieldCount - 1, 0 To lCap - 1)
+        ReDim m_aData(0 To m_lFieldCount - 1, 0 To lCap - 1)
     End If
     pvCaptureColumnMeta hStmt
     pvAnalyzeUpdatable
     lRow = 0
-    Do While vbsqlite3_step(hStmt) = SQLITE_ROW
+    Do
+        lRc = vbsqlite3_step(hStmt)
+        If lRc <> SQLITE_ROW Then
+            Exit Do
+        End If
         If m_lFieldCount > 0 Then
-            If lRow > UBound(m_vData, 2) Then
+            If lRow > UBound(m_aData, 2) Then
                 lCap = lCap * 2
-                ReDim Preserve m_vData(0 To m_lFieldCount - 1, 0 To lCap - 1)
+                ReDim Preserve m_aData(0 To m_lFieldCount - 1, 0 To lCap - 1)
             End If
             For lCol = 0 To m_lFieldCount - 1
-                m_vData(lCol, lRow) = ReadColumnValue(hStmt, lCol)
+                m_aData(lCol, lRow) = ReadColumnValue(hStmt, lCol)
             Next
         End If
         lRow = lRow + 1
     Loop
     If bFinalize Then
         Call vbsqlite3_finalize(hStmt)
+    End If
+    '--- a step error (e.g. a UDF calling SetResultError) fails the load
+    If lRc <> SQLITE_DONE Then
+        Err.Raise vbObjectError, "cRecordset", m_oConnection.LastDBError()
     End If
     m_lRecordCount = lRow
     m_lCurRow = -1
@@ -709,7 +720,7 @@ Private Sub pvClear()
     m_lFieldCount = 0
     m_lRecordCount = 0
     m_lCurRow = -1
-    Erase m_vData
+    Erase m_aData
     Erase m_aFieldName
     '--- column metadata + updatability + pending-changes state
     m_bUpdatable = False
@@ -722,11 +733,11 @@ Private Sub pvClear()
     Erase m_aOrigDb
     Erase m_aDeclType
     Set m_cColMeta = Nothing
-    Erase m_alPkCols
+    Erase m_aPkCols
     m_bWriteState = False
-    Erase m_vOrig
-    Erase m_abDirty
-    Erase m_alRowState
+    Erase m_aOriginal
+    Erase m_aDirty
+    Erase m_aRowState
     Set m_cDeleted = Nothing
     pvReleaseFields
 End Sub
@@ -748,7 +759,7 @@ End Sub
 
 Private Function pvResolveColumns(sList As String, lNumCols As Long) As Long()
     Dim aRet()          As Long
-    Dim asName()        As String
+    Dim aName()         As String
     Dim lIdx            As Long
     Dim lCol            As Long
 
@@ -763,10 +774,10 @@ Private Function pvResolveColumns(sList As String, lNumCols As Long) As Long()
         Next
         lNumCols = m_lFieldCount
     Else
-        asName = Split(sList, ",")
-        ReDim aRet(0 To UBound(asName))
-        For lIdx = 0 To UBound(asName)
-            lCol = frFieldIndex(Trim$(asName(lIdx)))
+        aName = Split(sList, ",")
+        ReDim aRet(0 To UBound(aName))
+        For lIdx = 0 To UBound(aName)
+            lCol = frFieldIndex(Trim$(aName(lIdx)))
             If lCol >= 0 Then
                 aRet(lNumCols) = lCol
                 lNumCols = lNumCols + 1
@@ -800,7 +811,7 @@ End Sub
 
 Private Sub pvAnalyzeUpdatable()
     Dim lCol            As Long
-    Dim asPkName()      As String
+    Dim aPkName()       As String
     Dim sPkType         As String
     Dim lPkIdx          As Long
     Dim bFound          As Boolean
@@ -826,16 +837,16 @@ Private Sub pvAnalyzeUpdatable()
     If Len(m_sOrigDb) = 0 Then
         m_sOrigDb = "main"
     End If
-    asPkName = pvGetPkColumns(sPkType)
+    aPkName = pvGetPkColumns(sPkType)
     If m_lPkCount = 0 Then
         Exit Sub
     End If
-    ReDim m_alPkCols(0 To m_lPkCount - 1)
+    ReDim m_aPkCols(0 To m_lPkCount - 1)
     For lPkIdx = 0 To m_lPkCount - 1
         bFound = False
         For lCol = 0 To m_lFieldCount - 1
-            If StrComp(m_aOrigColumn(lCol), asPkName(lPkIdx), vbTextCompare) = 0 Then
-                m_alPkCols(lPkIdx) = lCol
+            If StrComp(m_aOrigColumn(lCol), aPkName(lPkIdx), vbTextCompare) = 0 Then
+                m_aPkCols(lPkIdx) = lCol
                 bFound = True
                 Exit For
             End If
@@ -847,33 +858,33 @@ Private Sub pvAnalyzeUpdatable()
     '--- a single INTEGER PRIMARY KEY is the rowid alias: SQLite auto-assigns
     '--- it on NULL insert, so pvBatchInsert can backfill the cell
     If m_lPkCount = 1 And StrComp(sPkType, "INTEGER", vbTextCompare) = 0 Then
-        m_lAutoPkCol = m_alPkCols(0)
+        m_lAutoPkCol = m_aPkCols(0)
     End If
     m_bUpdatable = True
 End Sub
 
 Private Function pvGetPkColumns(sSinglePkType As String) As String()
     Dim hStmt           As LongPtr
-    Dim asName()        As String
-    Dim alPos()         As Long
-    Dim asRet()         As String
+    Dim aName()         As String
+    Dim aPos()          As Long
+    Dim aRet()          As String
     Dim lCount          As Long
     Dim lPk             As Long
     Dim lIdx            As Long
 
-    ReDim asName(0 To 3)
-    ReDim alPos(0 To 3)
+    ReDim aName(0 To 3)
+    ReDim aPos(0 To 3)
     hStmt = PrepareStatement(m_oConnection, "PRAGMA " & QuoteIdentifier(m_sOrigDb) & ".table_info(" & QuoteIdentifier(m_sOrigTable) & ")")
     Do While vbsqlite3_step(hStmt) = SQLITE_ROW
         '--- table_info columns: cid, name, type, notnull, dflt_value, pk
         lPk = vbsqlite3_column_int(hStmt, 5)
         If lPk > 0 Then
-            If lCount > UBound(asName) Then
-                ReDim Preserve asName(0 To 2 * lCount)
-                ReDim Preserve alPos(0 To 2 * lCount)
+            If lCount > UBound(aName) Then
+                ReDim Preserve aName(0 To 2 * lCount)
+                ReDim Preserve aPos(0 To 2 * lCount)
             End If
-            asName(lCount) = FromUtf8Ptr(vbsqlite3_column_text(hStmt, 1))
-            alPos(lCount) = lPk
+            aName(lCount) = FromUtf8Ptr(vbsqlite3_column_text(hStmt, 1))
+            aPos(lCount) = lPk
             If lPk = 1 Then
                 sSinglePkType = FromUtf8Ptr(vbsqlite3_column_text(hStmt, 2))
             End If
@@ -883,19 +894,19 @@ Private Function pvGetPkColumns(sSinglePkType As String) As String()
     Call vbsqlite3_finalize(hStmt)
     m_lPkCount = lCount
     If lCount > 0 Then
-        ReDim asRet(0 To lCount - 1)
+        ReDim aRet(0 To lCount - 1)
         For lIdx = 0 To lCount - 1
-            asRet(alPos(lIdx) - 1) = asName(lIdx)
+            aRet(aPos(lIdx) - 1) = aName(lIdx)
         Next
-        pvGetPkColumns = asRet
+        pvGetPkColumns = aRet
     End If
 End Function
 
 Private Sub pvEnsureWriteState()
     If Not m_bWriteState Then
-        ReDim m_vOrig(0 To m_lFieldCount - 1, 0 To UBound(m_vData, 2))
-        ReDim m_abDirty(0 To m_lFieldCount - 1, 0 To UBound(m_vData, 2))
-        ReDim m_alRowState(0 To UBound(m_vData, 2))
+        ReDim m_aOriginal(0 To m_lFieldCount - 1, 0 To UBound(m_aData, 2))
+        ReDim m_aDirty(0 To m_lFieldCount - 1, 0 To UBound(m_aData, 2))
+        ReDim m_aRowState(0 To UBound(m_aData, 2))
         Set m_cDeleted = New VBA.Collection
         m_bWriteState = True
     End If
@@ -904,16 +915,16 @@ End Sub
 Private Sub pvEnsureRowCapacity(ByVal lRows As Long)
     Dim lCap            As Long
 
-    lCap = UBound(m_vData, 2) + 1
+    lCap = UBound(m_aData, 2) + 1
     If lRows > lCap Then
         Do
             lCap = lCap * 2
         Loop While lRows > lCap
-        ReDim Preserve m_vData(0 To m_lFieldCount - 1, 0 To lCap - 1)
+        ReDim Preserve m_aData(0 To m_lFieldCount - 1, 0 To lCap - 1)
         If m_bWriteState Then
-            ReDim Preserve m_vOrig(0 To m_lFieldCount - 1, 0 To lCap - 1)
-            ReDim Preserve m_abDirty(0 To m_lFieldCount - 1, 0 To lCap - 1)
-            ReDim Preserve m_alRowState(0 To lCap - 1)
+            ReDim Preserve m_aOriginal(0 To m_lFieldCount - 1, 0 To lCap - 1)
+            ReDim Preserve m_aDirty(0 To m_lFieldCount - 1, 0 To lCap - 1)
+            ReDim Preserve m_aRowState(0 To lCap - 1)
         End If
     End If
 End Sub
@@ -936,14 +947,14 @@ Private Function pvPkWhereValue(ByVal lRow As Long, ByVal lPkIdx As Long) As Var
 
     '--- WHERE must address the row as stored in the DB: original value when
     '--- the PK cell itself has a pending change
-    lCol = m_alPkCols(lPkIdx)
+    lCol = m_aPkCols(lPkIdx)
     If m_bWriteState Then
-        If m_abDirty(lCol, lRow) Then
-            pvPkWhereValue = m_vOrig(lCol, lRow)
+        If m_aDirty(lCol, lRow) Then
+            pvPkWhereValue = m_aOriginal(lCol, lRow)
             Exit Function
         End If
     End If
-    pvPkWhereValue = m_vData(lCol, lRow)
+    pvPkWhereValue = m_aData(lCol, lRow)
 End Function
 
 Private Function pvPkWhereClause() As String
@@ -954,7 +965,7 @@ Private Function pvPkWhereClause() As String
         If lPkIdx > 0 Then
             sSql = sSql & " AND "
         End If
-        sSql = sSql & QuoteIdentifier(m_aOrigColumn(m_alPkCols(lPkIdx))) & " = ?"
+        sSql = sSql & QuoteIdentifier(m_aOrigColumn(m_aPkCols(lPkIdx))) & " = ?"
     Next
     pvPkWhereClause = sSql
 End Function
@@ -964,27 +975,27 @@ Private Function pvQualifiedTable() As String
 End Function
 
 Private Sub pvBatchDelete(vEntry As Variant)
-    Dim vParams()       As Variant
+    Dim aParams()       As Variant
 
-    vParams = vEntry(1)
-    pvExecParams "DELETE FROM " & pvQualifiedTable() & " WHERE " & pvPkWhereClause(), vParams
+    aParams = vEntry(1)
+    pvExecParams "DELETE FROM " & pvQualifiedTable() & " WHERE " & pvPkWhereClause(), aParams
 End Sub
 
 Private Sub pvBatchUpdate(ByVal lRow As Long)
     Dim sSet            As String
-    Dim vParams()       As Variant
+    Dim aParams()       As Variant
     Dim lCount          As Long
     Dim lCol            As Long
     Dim lPkIdx          As Long
 
-    ReDim vParams(0 To m_lFieldCount + m_lPkCount - 1)
+    ReDim aParams(0 To m_lFieldCount + m_lPkCount - 1)
     For lCol = 0 To m_lFieldCount - 1
-        If m_abDirty(lCol, lRow) And Len(m_aOrigColumn(lCol)) > 0 Then
+        If m_aDirty(lCol, lRow) And Len(m_aOrigColumn(lCol)) > 0 Then
             If Len(sSet) > 0 Then
                 sSet = sSet & ", "
             End If
             sSet = sSet & QuoteIdentifier(m_aOrigColumn(lCol)) & " = ?"
-            vParams(lCount) = m_vData(lCol, lRow)
+            aParams(lCount) = m_aData(lCol, lRow)
             lCount = lCount + 1
         End If
     Next
@@ -992,21 +1003,21 @@ Private Sub pvBatchUpdate(ByVal lRow As Long)
         Exit Sub
     End If
     For lPkIdx = 0 To m_lPkCount - 1
-        vParams(lCount) = pvPkWhereValue(lRow, lPkIdx)
+        aParams(lCount) = pvPkWhereValue(lRow, lPkIdx)
         lCount = lCount + 1
     Next
-    ReDim Preserve vParams(0 To lCount - 1)
-    pvExecParams "UPDATE " & pvQualifiedTable() & " SET " & sSet & " WHERE " & pvPkWhereClause(), vParams
+    ReDim Preserve aParams(0 To lCount - 1)
+    pvExecParams "UPDATE " & pvQualifiedTable() & " SET " & sSet & " WHERE " & pvPkWhereClause(), aParams
 End Sub
 
 Private Sub pvBatchInsert(ByVal lRow As Long)
     Dim sCols           As String
     Dim sVals           As String
-    Dim vParams()       As Variant
+    Dim aParams()       As Variant
     Dim lCount          As Long
     Dim lCol            As Long
 
-    ReDim vParams(0 To m_lFieldCount - 1)
+    ReDim aParams(0 To m_lFieldCount - 1)
     For lCol = 0 To m_lFieldCount - 1
         If Len(m_aOrigColumn(lCol)) > 0 Then
             If lCount > 0 Then
@@ -1015,32 +1026,32 @@ Private Sub pvBatchInsert(ByVal lRow As Long)
             End If
             sCols = sCols & QuoteIdentifier(m_aOrigColumn(lCol))
             sVals = sVals & "?"
-            vParams(lCount) = m_vData(lCol, lRow)
+            aParams(lCount) = m_aData(lCol, lRow)
             lCount = lCount + 1
         End If
     Next
     If lCount = 0 Then
         Exit Sub
     End If
-    ReDim Preserve vParams(0 To lCount - 1)
-    pvExecParams "INSERT INTO " & pvQualifiedTable() & " (" & sCols & ") VALUES (" & sVals & ")", vParams
+    ReDim Preserve aParams(0 To lCount - 1)
+    pvExecParams "INSERT INTO " & pvQualifiedTable() & " (" & sCols & ") VALUES (" & sVals & ")", aParams
     '--- INTEGER PRIMARY KEY auto-assigned on NULL insert: backfill the cell
     If m_lAutoPkCol >= 0 Then
-        If IsNull(m_vData(m_lAutoPkCol, lRow)) Then
-            m_vData(m_lAutoPkCol, lRow) = m_oConnection.LastInsertAutoID
+        If IsNull(m_aData(m_lAutoPkCol, lRow)) Then
+            m_aData(m_lAutoPkCol, lRow) = m_oConnection.LastInsertAutoID
         End If
     End If
 End Sub
 
-Private Sub pvExecParams(sSql As String, vParams() As Variant)
+Private Sub pvExecParams(sSql As String, aParams() As Variant)
     Dim hStmt           As LongPtr
     Dim lIdx            As Long
     Dim lRc             As Long
 
     hStmt = PrepareStatement(m_oConnection, sSql)
     On Error GoTo EH
-    For lIdx = 0 To UBound(vParams)
-        If BindVariant(hStmt, lIdx + 1, vParams(lIdx)) <> SQLITE_OK Then
+    For lIdx = 0 To UBound(aParams)
+        If BindVariant(hStmt, lIdx + 1, aParams(lIdx)) <> SQLITE_OK Then
             Err.Raise vbObjectError, "cRecordset.UpdateBatch", m_oConnection.LastDBError()
         End If
     Next
@@ -1063,20 +1074,20 @@ Private Sub pvRemoveRow(ByVal lRow As Long)
 
     For lIdx = lRow To m_lRecordCount - 2
         For lCol = 0 To m_lFieldCount - 1
-            m_vData(lCol, lIdx) = m_vData(lCol, lIdx + 1)
-            m_vOrig(lCol, lIdx) = m_vOrig(lCol, lIdx + 1)
-            m_abDirty(lCol, lIdx) = m_abDirty(lCol, lIdx + 1)
+            m_aData(lCol, lIdx) = m_aData(lCol, lIdx + 1)
+            m_aOriginal(lCol, lIdx) = m_aOriginal(lCol, lIdx + 1)
+            m_aDirty(lCol, lIdx) = m_aDirty(lCol, lIdx + 1)
         Next
-        m_alRowState(lIdx) = m_alRowState(lIdx + 1)
+        m_aRowState(lIdx) = m_aRowState(lIdx + 1)
     Next
     m_lRecordCount = m_lRecordCount - 1
 End Sub
 
 Private Sub pvRestoreDeleted()
     Dim vEntry          As Variant
-    Dim vRow            As Variant
-    Dim vOrig           As Variant
-    Dim vDirty          As Variant
+    Dim aRow()          As Variant
+    Dim aOrig()         As Variant
+    Dim aDirty()        As Boolean
     Dim lCol            As Long
     Dim lNew            As Long
 
@@ -1085,15 +1096,15 @@ Private Sub pvRestoreDeleted()
         m_cDeleted.Remove 1
         pvEnsureRowCapacity m_lRecordCount + 1
         lNew = m_lRecordCount
-        vRow = vEntry(0)
-        vDirty = vEntry(3)
-        vOrig = vEntry(4)
+        aRow = vEntry(0)
+        aDirty = vEntry(3)
+        aOrig = vEntry(4)
         For lCol = 0 To m_lFieldCount - 1
-            m_vData(lCol, lNew) = vRow(lCol)
-            m_vOrig(lCol, lNew) = vOrig(lCol)
-            m_abDirty(lCol, lNew) = vDirty(lCol)
+            m_aData(lCol, lNew) = aRow(lCol)
+            m_aOriginal(lCol, lNew) = aOrig(lCol)
+            m_aDirty(lCol, lNew) = aDirty(lCol)
         Next
-        m_alRowState(lNew) = vEntry(2)
+        m_aRowState(lNew) = vEntry(2)
         m_lRecordCount = m_lRecordCount + 1
     Loop
 End Sub
@@ -1104,10 +1115,10 @@ Private Sub pvClearWriteState()
 
     If m_bWriteState Then
         For lRow = 0 To m_lRecordCount - 1
-            m_alRowState(lRow) = ROW_CLEAN
+            m_aRowState(lRow) = ROW_CLEAN
             For lCol = 0 To m_lFieldCount - 1
-                m_abDirty(lCol, lRow) = False
-                m_vOrig(lCol, lRow) = Empty
+                m_aDirty(lCol, lRow) = False
+                m_aOriginal(lCol, lRow) = Empty
             Next
         Next
         Set m_cDeleted = New VBA.Collection
@@ -1115,40 +1126,40 @@ Private Sub pvClearWriteState()
 End Sub
 
 Private Sub pvApplySort()
-    Dim alCols()        As Long
-    Dim abDesc()        As Boolean
+    Dim aCols()         As Long
+    Dim aDesc()         As Boolean
     Dim lKeys           As Long
-    Dim alIdx()         As Long
+    Dim aIdx()          As Long
     Dim lRow            As Long
 
     If Len(Trim$(m_sSort)) = 0 Or m_lRecordCount = 0 Then
         Exit Sub
     End If
-    pvParseSort alCols, abDesc, lKeys
+    pvParseSort aCols, aDesc, lKeys
     If lKeys = 0 Then
         Exit Sub
     End If
-    ReDim alIdx(0 To m_lRecordCount - 1)
+    ReDim aIdx(0 To m_lRecordCount - 1)
     For lRow = 0 To m_lRecordCount - 1
-        alIdx(lRow) = lRow
+        aIdx(lRow) = lRow
     Next
-    pvQuickSortRows alIdx, 0, m_lRecordCount - 1, alCols, abDesc, lKeys
-    pvPermuteRows alIdx
+    pvQuickSortRows aIdx, 0, m_lRecordCount - 1, aCols, aDesc, lKeys
+    pvPermuteRows aIdx
 End Sub
 
-Private Sub pvParseSort(alCols() As Long, abDesc() As Boolean, lKeys As Long)
-    Dim asTok()         As String
+Private Sub pvParseSort(aCols() As Long, aDesc() As Boolean, lKeys As Long)
+    Dim aTok()          As String
     Dim lIdx            As Long
     Dim sName           As String
     Dim sDir            As String
     Dim lPos            As Long
 
-    asTok = Split(m_sSort, ",")
-    ReDim alCols(0 To UBound(asTok))
-    ReDim abDesc(0 To UBound(asTok))
+    aTok = Split(m_sSort, ",")
+    ReDim aCols(0 To UBound(aTok))
+    ReDim aDesc(0 To UBound(aTok))
     lKeys = 0
-    For lIdx = 0 To UBound(asTok)
-        sName = Trim$(asTok(lIdx))
+    For lIdx = 0 To UBound(aTok)
+        sName = Trim$(aTok(lIdx))
         If Len(sName) > 0 Then
             sDir = vbNullString
             If Left$(sName, 1) = "[" Then
@@ -1165,17 +1176,17 @@ Private Sub pvParseSort(alCols() As Long, abDesc() As Boolean, lKeys As Long)
                     sName = Left$(sName, lPos - 1)
                 End If
             End If
-            alCols(lKeys) = frFieldIndex(sName)
-            If alCols(lKeys) < 0 Then
+            aCols(lKeys) = frFieldIndex(sName)
+            If aCols(lKeys) < 0 Then
                 Err.Raise vbObjectError, "cRecordset.Sort", "Unknown field '" & sName & "'"
             End If
-            abDesc(lKeys) = (StrComp(sDir, "DESC", vbTextCompare) = 0)
+            aDesc(lKeys) = (StrComp(sDir, "DESC", vbTextCompare) = 0)
             lKeys = lKeys + 1
         End If
     Next
 End Sub
 
-Private Sub pvQuickSortRows(alIdx() As Long, ByVal lLo As Long, ByVal lHi As Long, alCols() As Long, abDesc() As Boolean, ByVal lKeys As Long)
+Private Sub pvQuickSortRows(aIdx() As Long, ByVal lLo As Long, ByVal lHi As Long, aCols() As Long, aDesc() As Boolean, ByVal lKeys As Long)
     Dim lLeft           As Long
     Dim lRight          As Long
     Dim lPivot          As Long
@@ -1183,37 +1194,37 @@ Private Sub pvQuickSortRows(alIdx() As Long, ByVal lLo As Long, ByVal lHi As Lon
 
     lLeft = lLo
     lRight = lHi
-    lPivot = alIdx((lLo + lHi) \ 2)
+    lPivot = aIdx((lLo + lHi) \ 2)
     Do While lLeft <= lRight
-        Do While pvCompareRows(alIdx(lLeft), lPivot, alCols, abDesc, lKeys) < 0
+        Do While pvCompareRows(aIdx(lLeft), lPivot, aCols, aDesc, lKeys) < 0
             lLeft = lLeft + 1
         Loop
-        Do While pvCompareRows(alIdx(lRight), lPivot, alCols, abDesc, lKeys) > 0
+        Do While pvCompareRows(aIdx(lRight), lPivot, aCols, aDesc, lKeys) > 0
             lRight = lRight - 1
         Loop
         If lLeft <= lRight Then
-            lTemp = alIdx(lLeft)
-            alIdx(lLeft) = alIdx(lRight)
-            alIdx(lRight) = lTemp
+            lTemp = aIdx(lLeft)
+            aIdx(lLeft) = aIdx(lRight)
+            aIdx(lRight) = lTemp
             lLeft = lLeft + 1
             lRight = lRight - 1
         End If
     Loop
     If lLo < lRight Then
-        pvQuickSortRows alIdx, lLo, lRight, alCols, abDesc, lKeys
+        pvQuickSortRows aIdx, lLo, lRight, aCols, aDesc, lKeys
     End If
     If lLeft < lHi Then
-        pvQuickSortRows alIdx, lLeft, lHi, alCols, abDesc, lKeys
+        pvQuickSortRows aIdx, lLeft, lHi, aCols, aDesc, lKeys
     End If
 End Sub
 
-Private Function pvCompareRows(ByVal lRow1 As Long, ByVal lRow2 As Long, alCols() As Long, abDesc() As Boolean, ByVal lKeys As Long) As Long
+Private Function pvCompareRows(ByVal lRow1 As Long, ByVal lRow2 As Long, aCols() As Long, aDesc() As Boolean, ByVal lKeys As Long) As Long
     Dim lIdx            As Long
     Dim lCmp            As Long
 
     For lIdx = 0 To lKeys - 1
-        lCmp = pvCompareValues(m_vData(alCols(lIdx), lRow1), m_vData(alCols(lIdx), lRow2))
-        If abDesc(lIdx) Then
+        lCmp = pvCompareValues(m_aData(aCols(lIdx), lRow1), m_aData(aCols(lIdx), lRow2))
+        If aDesc(lIdx) Then
             lCmp = -lCmp
         End If
         If lCmp <> 0 Then
@@ -1225,40 +1236,40 @@ Private Function pvCompareRows(ByVal lRow1 As Long, ByVal lRow2 As Long, alCols(
     pvCompareRows = Sgn(lRow1 - lRow2)
 End Function
 
-Private Sub pvPermuteRows(alIdx() As Long)
-    Dim vNew()          As Variant
-    Dim vOrigNew()      As Variant
-    Dim abDirtyNew()    As Boolean
-    Dim alStateNew()    As Long
+Private Sub pvPermuteRows(aIdx() As Long)
+    Dim aDataNew()      As Variant
+    Dim aOriginalNew()  As Variant
+    Dim aDirtyNew()     As Boolean
+    Dim aStateNew()     As Long
     Dim lRow            As Long
     Dim lCol            As Long
     Dim lNewCur         As Long
 
-    ReDim vNew(0 To m_lFieldCount - 1, 0 To UBound(m_vData, 2))
+    ReDim aDataNew(0 To m_lFieldCount - 1, 0 To UBound(m_aData, 2))
     lNewCur = m_lCurRow
     For lRow = 0 To m_lRecordCount - 1
         For lCol = 0 To m_lFieldCount - 1
-            vNew(lCol, lRow) = m_vData(lCol, alIdx(lRow))
+            aDataNew(lCol, lRow) = m_aData(lCol, aIdx(lRow))
         Next
-        If alIdx(lRow) = m_lCurRow Then
+        If aIdx(lRow) = m_lCurRow Then
             lNewCur = lRow
         End If
     Next
-    m_vData = vNew
+    m_aData = aDataNew
     If m_bWriteState Then
-        ReDim vOrigNew(0 To m_lFieldCount - 1, 0 To UBound(m_vOrig, 2))
-        ReDim abDirtyNew(0 To m_lFieldCount - 1, 0 To UBound(m_abDirty, 2))
-        ReDim alStateNew(0 To UBound(m_alRowState))
+        ReDim aOriginalNew(0 To m_lFieldCount - 1, 0 To UBound(m_aOriginal, 2))
+        ReDim aDirtyNew(0 To m_lFieldCount - 1, 0 To UBound(m_aDirty, 2))
+        ReDim aStateNew(0 To UBound(m_aRowState))
         For lRow = 0 To m_lRecordCount - 1
             For lCol = 0 To m_lFieldCount - 1
-                vOrigNew(lCol, lRow) = m_vOrig(lCol, alIdx(lRow))
-                abDirtyNew(lCol, lRow) = m_abDirty(lCol, alIdx(lRow))
+                aOriginalNew(lCol, lRow) = m_aOriginal(lCol, aIdx(lRow))
+                aDirtyNew(lCol, lRow) = m_aDirty(lCol, aIdx(lRow))
             Next
-            alStateNew(lRow) = m_alRowState(alIdx(lRow))
+            aStateNew(lRow) = m_aRowState(aIdx(lRow))
         Next
-        m_vOrig = vOrigNew
-        m_abDirty = abDirtyNew
-        m_alRowState = alStateNew
+        m_aOriginal = aOriginalNew
+        m_aDirty = aDirtyNew
+        m_aRowState = aStateNew
     End If
     '--- the cursor follows its row to the row's new position
     If m_lCurRow >= 0 And m_lCurRow < m_lRecordCount Then
@@ -1280,7 +1291,7 @@ Private Function pvFindMove(ByVal lFrom As Long, ByVal lStep As Long, sCriterion
     End If
     lRow = lFrom
     Do While lRow >= 0 And lRow < m_lRecordCount
-        If pvMatchValue(m_vData(lCol, lRow), lOp, vValue, bDistinctNull) Then
+        If pvMatchValue(m_aData(lCol, lRow), lOp, vValue, bDistinctNull) Then
             '--- found: move there; not found leaves the position unchanged
             AbsolutePosition = lRow
             pvFindMove = True

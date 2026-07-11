@@ -14,11 +14,12 @@ Attribute VB_Exposed = True
 '=========================================================================
 ' cConnection - SQLite database connection wrapper (winsqlite3.dll)
 '
-' Implemented: open/create/close, Execute, transactions with savepoints,
-' error/version info, page-size/synchronous/busy-timeout pragmas, date
-' helpers. Members returning cRecordset/cCommand/cCursor/cMemDB/cDataBases
-' and the UDF/collation/ADO surface are left as stubs until those classes
-' are implemented.
+' Implemented: open/create/close, Execute + parameterised GetRs/ExecCmd,
+' transactions with savepoints, recordsets/commands/cursors, schema
+' objects (DataBases), MemDB, CreateTable, CopyDatabase, UniqueID64,
+' UDF/collation registration, error/version info, pragmas, date helpers.
+' Still stubs: CreateTableFromRsContent (needs Content serialization) and
+' the ADO migration surface (CreateTableFromADORs).
 '=========================================================================
 Option Explicit
 
@@ -384,21 +385,27 @@ Public Function LastDBErrCode(Optional ByVal GetExtendedCode As Boolean) As Long
 End Function
 
 Public Function AddUserDefinedFunction(New_ObjectIFunc As IFunction) As Boolean
+    AddUserDefinedFunction = UdfRegisterFunction(Me, New_ObjectIFunc)
 End Function
 
 Public Function RemoveUserDefinedFunction(New_ObjectIFunc As IFunction) As Boolean
+    RemoveUserDefinedFunction = UdfUnregisterFunction(Me, New_ObjectIFunc)
 End Function
 
 Public Function AddUserDefinedAggregateFunction(New_ObjectIAggFunc As IAggregateFunction) As Boolean
+    AddUserDefinedAggregateFunction = UdfRegisterAggregate(Me, New_ObjectIAggFunc)
 End Function
 
 Public Function RemoveUserDefinedAggregateFunction(New_ObjectIAggFunc As IAggregateFunction) As Boolean
+    RemoveUserDefinedAggregateFunction = UdfUnregisterAggregate(Me, New_ObjectIAggFunc)
 End Function
 
 Public Function AddUserDefinedCollation(New_ObjectIColl As ICollation) As Boolean
+    AddUserDefinedCollation = UdfRegisterCollation(Me, New_ObjectIColl)
 End Function
 
 Public Function RemoveUserDefinedCollation(New_ObjectIColl As ICollation) As Boolean
+    RemoveUserDefinedCollation = UdfUnregisterCollation(Me, New_ObjectIColl)
 End Function
 
 Public Sub CreateTableFromRsContent(Content() As Byte, Optional NewTableName As String, Optional ByVal AsTempTable As Boolean, Optional ByVal WithPrimaryKeys As Boolean)
@@ -432,28 +439,28 @@ Public Function NewFieldDefs() As Collection
 End Function
 
 Public Function GetRs(ByVal SQL As String, ParamArray P() As Variant) As cRecordset
-    Dim vParams()       As Variant
+    Dim aParams()       As Variant
 
-    vParams = P
-    Set GetRs = frGetRs(SQL, vParams)
+    aParams = P
+    Set GetRs = frGetRs(SQL, aParams)
 End Function
 
 Public Sub ExecCmd(ByVal SQL As String, ParamArray P() As Variant)
-    Dim vParams()       As Variant
+    Dim aParams()       As Variant
 
-    vParams = P
-    frExecCmd SQL, vParams
+    aParams = P
+    frExecCmd SQL, aParams
 End Sub
 
 Friend Property Get frDbHandle() As LongPtr
     frDbHandle = m_hDb
 End Property
 
-Friend Function frGetRs(sSql As String, vParams() As Variant) As cRecordset
+Friend Function frGetRs(sSql As String, aParams() As Variant) As cRecordset
     Dim oRs             As cRecordset
 
     Set oRs = New cRecordset
-    oRs.frOpenParams Me, sSql, vParams
+    oRs.frOpenParams Me, sSql, aParams
     Set frGetRs = oRs
 End Function
 
@@ -479,6 +486,7 @@ End Function
 
 Private Sub pvCloseDatabase()
     If m_hDb <> 0 Then
+        UdfReleaseDb m_hDb
         Call vbsqlite3_close_v2(m_hDb)
         m_hDb = 0
     End If
@@ -498,7 +506,7 @@ Private Function pvExec(sSql As String) As Long
     pvExec = vbsqlite3_exec(m_hDb, VarPtr(baSql(0)), 0, 0, 0)
 End Function
 
-Friend Sub frExecCmd(sSql As String, vParams() As Variant)
+Friend Sub frExecCmd(sSql As String, aParams() As Variant)
     Dim baSql()         As Byte
     Dim hStmt           As LongPtr
     Dim lIdx            As Long
@@ -512,8 +520,8 @@ Friend Sub frExecCmd(sSql As String, vParams() As Variant)
         Err.Raise vbObjectError, "cConnection.ExecCmd", pvLastError()
     End If
     On Error GoTo EH
-    For lIdx = LBound(vParams) To UBound(vParams)
-        If BindVariant(hStmt, lIdx - LBound(vParams) + 1, vParams(lIdx)) <> SQLITE_OK Then
+    For lIdx = LBound(aParams) To UBound(aParams)
+        If BindVariant(hStmt, lIdx - LBound(aParams) + 1, aParams(lIdx)) <> SQLITE_OK Then
             Err.Raise vbObjectError, "cConnection.ExecCmd", pvLastError()
         End If
     Next

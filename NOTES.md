@@ -340,10 +340,22 @@ type. `cTestHost` is `MultiUse`.
       fills the INTEGER PK with a fresh id. NB (probed): RC6's `AddNew`
       leaves other new-row cells **Empty** while TC6 sets `Null` — minor
       divergence, revisit with the Content work.
-- [ ] UDF/collation subsystem: `cUDFMethods` + `cConnection.Add/
-      RemoveUserDefined*` over `create_function_v2`/`create_collation`
-      AddressOf trampolines (`IFunction`/`IAggregateFunction`/`ICollation`
-      stay empty by design — users Implements them).
+- [x] UDF/collation subsystem — `cConnection.Add/RemoveUserDefined*` over
+      `create_function_v2`/`create_collation` with **plain VB6 AddressOf
+      trampolines** in [src/mdUdf.bas](src/mdUdf.bas) (winsqlite3's whole
+      ABI incl. callbacks is StdCall, so no thunks needed — verified by the
+      tests). Each name from `DefinedNames` (comma-separated) gets a
+      registry slot (object + ZeroBasedNameIndex); the 1-based slot number
+      rides through SQLite as the user-data pointer. VB errors in callbacks
+      never propagate into SQLite (converted to `sqlite3_result_error16`;
+      collations fall back to "equal"). `cUDFMethods` wraps the live
+      `sqlite3_context`: `Get*` argument readers (incl. VT_I8 `GetInt64`
+      and ISO-date `GetDateTime`) and `SetResult*` setters (`TRANSIENT`
+      buffers; `SetResultError` fails the statement — `pvMaterialize` now
+      raises when the step loop ends in an error instead of returning a
+      truncated result). Slots are released when their connection closes.
+      `IFunction`/`IAggregateFunction`/`ICollation` stay empty by design —
+      users Implements them.
 - [ ] Content serialization (`Content`/`ContentChangesOnly`/
       `CreateTableFromRsContent`/`GetADORsFromContent`), `ToJSONUTF8`,
       `GetRowsWithHeaders` — needs a blob-format decision (RC6-compatible
