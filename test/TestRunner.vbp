@@ -33,6 +33,7 @@ Module=mdTestRunner; mdTestRunner.bas
 Module=mdConnectionTests; mdConnectionTests.bas
 Module=mdRecordsetTests; mdRecordsetTests.bas
 Module=mdCommandTests; mdCommandTests.bas
+Module=mdSchemaTests; mdSchemaTests.bas
 Startup="(None)"
 ExeName32="TestRunner.dll"
 Command32=""

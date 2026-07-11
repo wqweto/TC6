@@ -304,11 +304,15 @@ type. `cTestHost` is `MultiUse`.
       on the zeroed pointer **before** any dereference — the raw deref used
       to AV in late-bound paths) matches RC6 member-for-member and is kept
       as final; the two lifetime tests pin the contract.
+- [x] Schema objects: `cDataBases`/`cDataBase` → `cTables`/`cTable` →
+      `cColumns`/`cColumn` + `cIndexes`/`cIndex`, `cTriggers`/`cTrigger`,
+      `cViews`/`cView`, wired from `cConnection.DataBases` (see section
+      below).
 - [ ] `cRecordset` Sort/Find, Content serialization, ADO interop, JSON
       export.
-- [ ] Schema objects (`cDataBase(s)`/`cTable(s)`/`cColumn(s)`/…), `cMemDB`,
-      UDF/collation registration (`IFunction`/`IAggregateFunction`/
-      `ICollation` callbacks).
+- [ ] `cMemDB`, `CopyDatabase` (`sqlite3_backup_*`), UDF/collation
+      registration (`IFunction`/`IAggregateFunction`/`ICollation`
+      callbacks + `cUDFMethods`).
 
 ## [src/cConnection.cls](src/cConnection.cls) — connection wrapper
 
@@ -357,9 +361,43 @@ would never equality-match text-stored dates).
 `CreateCommand`/`CreateSelectCommand`/`CreateCursor` build the corresponding
 prepared-statement wrappers (below).
 
-**Left as stubs** (need classes not yet built): `DataBases`/`MemDB`,
-`CopyDatabase`, the UDF/collation add/remove pair, and the
-ADO/`CreateTableFrom*` migration surface.
+`DataBases` returns a fresh `cDataBases` snapshot (see the schema-objects
+section).
+
+**Left as stubs** (need classes not yet built): `MemDB`, `CopyDatabase`, the
+UDF/collation add/remove pair, and the ADO/`CreateTableFrom*` migration
+surface.
+
+## Schema objects — cDataBases → cTables → cColumns / cIndexes / cTriggers / cViews
+
+Read-only schema tree over pragmas + `sqlite_master`, built **on top of the
+recordset machinery** (`cConnection.GetRs`). Every collection is a snapshot
+taken at creation, and every parent property (`cDataBase.Tables`,
+`cTable.Columns`, …) builds a fresh snapshot on access — nothing is cached,
+so `ReScanSchemaInfo` is a no-op. All collections follow the `cFields`
+pattern: `VBA.Collection` keyed on name (O(1) `Item(name)`), `Item` accepts a
+0-based index or a name, `NewEnum` enables `For Each`.
+
+- `cConnection.DataBases` → `cDataBases` (`PRAGMA database_list`), with
+  `AttachDataBase`/`DetachDataBase` delegating to the connection and
+  re-snapshotting. `cDataBase`: `Name`/`NameInBrackets`/`Tables`/`Views`.
+- `cTables` (per database): `sqlite_master WHERE type='table'`, internal
+  `sqlite_*` tables excluded. `cTable`: `Name`, `SQLForCreate` (the stored
+  DDL), `Columns`, `Indexes`, `Triggers`; `Constraint` (table-level clause)
+  needs DDL parsing — not implemented.
+- `cColumns` (per table): `PRAGMA table_info` enriched with
+  `sqlite3_table_column_metadata` (collation sequence + autoincrement) and a
+  single-column-UNIQUE-index scan (`PRAGMA index_list`/`index_info`,
+  `unique<>0`). `cColumn`: `Name`, `ColumnType` (declared type),
+  `DefaultValue` (verbatim expression text, e.g. `'x'`),
+  `NotNullConstraint`, `PrimaryKey`/`PrimaryAutoIncrement`, `Collate`,
+  `UniqueConstraint`. The DDL-text-only members (`OriginalConstraint`/
+  `ConstraintName`/`CheckExpression`/`PrimarySortOrder`/conflict
+  algorithms) return defaults — they need CREATE TABLE parsing.
+- `cIndexes` (per table): `sqlite_master WHERE type='index'`, including the
+  implicit `sqlite_autoindex_*` entries (whose `SQL` is empty).
+  `cTriggers` (per table) and `cViews` (per database) likewise; `cView.SQL`
+  is the best-effort SELECT body (text after the first ` AS ` in the DDL).
 
 ## [src/cCommand.cls](src/cCommand.cls) / cSelectCommand / cCursor — prepared statements
 

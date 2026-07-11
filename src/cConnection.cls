@@ -95,6 +95,11 @@ Public Property Let Synchronous(ByVal RHS As eConnectionSynchronousType)
 End Property
 
 Public Property Get DataBases() As cDataBases
+    Dim oDbs            As cDataBases
+
+    Set oDbs = New cDataBases
+    oDbs.frInit Me
+    Set DataBases = oDbs
 End Property
 
 Public Property Get UniqueID64() As Variant
