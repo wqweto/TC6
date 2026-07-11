@@ -35,7 +35,7 @@ Public Function UdfRegisterFunction(oCnn As cConnection, oFunc As IFunction) As 
             Set m_aRegs(lSlot).oFunc = oFunc
             m_aRegs(lSlot).lNameIdx = lIdx
             baName = ToUtf8Array(Trim$(aNames(lIdx)) & vbNullChar)
-            If vbsqlite3_create_function_v2(oCnn.frDbHandle, VarPtr(baName(0)), -1, SQLITE_UTF8, lSlot, _
+            If stub_sqlite3_create_function_v2(oCnn.frDbHandle, VarPtr(baName(0)), -1, SQLITE_UTF8, lSlot, _
                     AddressOf UdfFuncCallback, 0, 0, 0) <> SQLITE_OK Then
                 pvFreeSlot lSlot
                 Exit Function
@@ -64,7 +64,7 @@ Public Function UdfRegisterAggregate(oCnn As cConnection, oAggFunc As IAggregate
             Set m_aRegs(lSlot).oAggFunc = oAggFunc
             m_aRegs(lSlot).lNameIdx = lIdx
             baName = ToUtf8Array(Trim$(aNames(lIdx)) & vbNullChar)
-            If vbsqlite3_create_function_v2(oCnn.frDbHandle, VarPtr(baName(0)), -1, SQLITE_UTF8, lSlot, _
+            If stub_sqlite3_create_function_v2(oCnn.frDbHandle, VarPtr(baName(0)), -1, SQLITE_UTF8, lSlot, _
                     0, AddressOf UdfStepCallback, AddressOf UdfFinalCallback, 0) <> SQLITE_OK Then
                 pvFreeSlot lSlot
                 Exit Function
@@ -93,7 +93,7 @@ Public Function UdfRegisterCollation(oCnn As cConnection, oColl As ICollation) A
             Set m_aRegs(lSlot).oColl = oColl
             m_aRegs(lSlot).lNameIdx = lIdx
             baName = ToUtf8Array(Trim$(aNames(lIdx)) & vbNullChar)
-            If vbsqlite3_create_collation(oCnn.frDbHandle, VarPtr(baName(0)), SQLITE_UTF8, lSlot, _
+            If stub_sqlite3_create_collation(oCnn.frDbHandle, VarPtr(baName(0)), SQLITE_UTF8, lSlot, _
                     AddressOf UdfCollateCallback) <> SQLITE_OK Then
                 pvFreeSlot lSlot
                 Exit Function
@@ -126,7 +126,7 @@ Public Sub UdfFuncCallback(ByVal hCtx As LongPtr, ByVal lArgc As Long, ByVal lpA
     Dim oUdf            As cUDFMethods
 
     On Error GoTo EH
-    lSlot = vbsqlite3_user_data(hCtx)
+    lSlot = stub_sqlite3_user_data(hCtx)
     Set oUdf = New cUDFMethods
     oUdf.frInit hCtx, lArgc, lpArgv
     m_aRegs(lSlot).oFunc.Callback m_aRegs(lSlot).lNameIdx, lArgc, oUdf
@@ -141,7 +141,7 @@ Public Sub UdfStepCallback(ByVal hCtx As LongPtr, ByVal lArgc As Long, ByVal lpA
     Dim oUdf            As cUDFMethods
 
     On Error GoTo EH
-    lSlot = vbsqlite3_user_data(hCtx)
+    lSlot = stub_sqlite3_user_data(hCtx)
     Set oUdf = New cUDFMethods
     oUdf.frInit hCtx, lArgc, lpArgv
     m_aRegs(lSlot).oAggFunc.CallbackStep m_aRegs(lSlot).lNameIdx, lArgc, oUdf
@@ -155,7 +155,7 @@ Public Sub UdfFinalCallback(ByVal hCtx As LongPtr)
     Dim oUdf            As cUDFMethods
 
     On Error GoTo EH
-    lSlot = vbsqlite3_user_data(hCtx)
+    lSlot = stub_sqlite3_user_data(hCtx)
     Set oUdf = New cUDFMethods
     oUdf.frInit hCtx, 0, 0
     m_aRegs(lSlot).oAggFunc.CallbackFinal m_aRegs(lSlot).lNameIdx, oUdf
@@ -188,9 +188,9 @@ Private Sub pvUnregisterNames(oCnn As cConnection, sDefinedNames As String, ByVa
         If Len(Trim$(aNames(lIdx))) > 0 Then
             baName = ToUtf8Array(Trim$(aNames(lIdx)) & vbNullChar)
             If bCollation Then
-                Call vbsqlite3_create_collation(oCnn.frDbHandle, VarPtr(baName(0)), SQLITE_UTF8, 0, 0)
+                Call stub_sqlite3_create_collation(oCnn.frDbHandle, VarPtr(baName(0)), SQLITE_UTF8, 0, 0)
             Else
-                Call vbsqlite3_create_function_v2(oCnn.frDbHandle, VarPtr(baName(0)), -1, SQLITE_UTF8, 0, 0, 0, 0, 0)
+                Call stub_sqlite3_create_function_v2(oCnn.frDbHandle, VarPtr(baName(0)), -1, SQLITE_UTF8, 0, 0, 0, 0, 0)
             End If
         End If
     Next
@@ -242,5 +242,5 @@ Private Sub pvResultError(ByVal hCtx As LongPtr, sMsg As String)
     If Len(sMsg) = 0 Then
         sMsg = "Unhandled error in user-defined function"
     End If
-    Call vbsqlite3_result_error16(hCtx, StrPtr(sMsg), -1)
+    Call stub_sqlite3_result_error16(hCtx, StrPtr(sMsg), -1)
 End Sub

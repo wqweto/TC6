@@ -102,7 +102,7 @@ Private Sub pvColumnMetadata(oCnn As cConnection, sDb As String, sTable As Strin
     baDb = ToUtf8Array(sDb & vbNullChar)
     baTable = ToUtf8Array(sTable & vbNullChar)
     baColumn = ToUtf8Array(sColumn & vbNullChar)
-    If vbsqlite3_table_column_metadata(oCnn.frDbHandle, VarPtr(baDb(0)), VarPtr(baTable(0)), VarPtr(baColumn(0)), _
+    If stub_sqlite3_table_column_metadata(oCnn.frDbHandle, VarPtr(baDb(0)), VarPtr(baTable(0)), VarPtr(baColumn(0)), _
             0, VarPtr(lpCollSeq), VarPtr(lNotNull), VarPtr(lPk), VarPtr(lAutoInc)) = SQLITE_OK Then
         sCollate = FromUtf8Ptr(lpCollSeq)
         bAutoInc = (lAutoInc <> 0)

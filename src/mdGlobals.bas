@@ -83,18 +83,18 @@ Public Function BindVariant(ByVal hStmt As LongPtr, ByVal lIndex As Long, vValue
     '--- SQLITE_TRANSIENT so SQLite copies the buffer before we free it
     Select Case VarType(vValue)
     Case vbNull, vbEmpty
-        BindVariant = vbsqlite3_bind_null(hStmt, lIndex)
+        BindVariant = stub_sqlite3_bind_null(hStmt, lIndex)
     Case vbBoolean
-        BindVariant = vbsqlite3_bind_int(hStmt, lIndex, IIf(vValue, 1, 0))
+        BindVariant = stub_sqlite3_bind_int(hStmt, lIndex, IIf(vValue, 1, 0))
     Case vbByte, vbInteger, vbLong
-        BindVariant = vbsqlite3_bind_int(hStmt, lIndex, CLng(vValue))
+        BindVariant = stub_sqlite3_bind_int(hStmt, lIndex, CLng(vValue))
     Case vbCurrency, vbDecimal
         '--- int64 carrier types: a double round-trip would lose precision
         '--- above 2^53, so integral values go through bind_int64
         If vValue = Int(vValue) Then
             BindVariant = BindInt64Value(hStmt, lIndex, vValue)
         Else
-            BindVariant = vbsqlite3_bind_double(hStmt, lIndex, CDbl(vValue))
+            BindVariant = stub_sqlite3_bind_double(hStmt, lIndex, CDbl(vValue))
         End If
     Case VT_I8
         BindVariant = BindInt64Value(hStmt, lIndex, vValue)
@@ -102,7 +102,7 @@ Public Function BindVariant(ByVal hStmt As LongPtr, ByVal lIndex As Long, vValue
         '--- dates are stored as ISO text (see cConnection.GetDateString)
         BindVariant = BindTextValue(hStmt, lIndex, Format$(vValue, "yyyy-mm-dd hh:nn:ss"))
     Case vbSingle, vbDouble
-        BindVariant = vbsqlite3_bind_double(hStmt, lIndex, CDbl(vValue))
+        BindVariant = stub_sqlite3_bind_double(hStmt, lIndex, CDbl(vValue))
     Case vbByte + vbArray
         baBuf = vValue
         BindVariant = BindBlobValue(hStmt, lIndex, baBuf)
@@ -113,11 +113,11 @@ End Function
 
 Public Function BindInt64Value(ByVal hStmt As LongPtr, ByVal lIndex As Long, vValue As Variant) As Long
 #If Win64 Then
-    BindInt64Value = vbsqlite3_bind_int64(hStmt, lIndex, CLngLng(vValue))
+    BindInt64Value = stub_sqlite3_bind_int64(hStmt, lIndex, CLngLng(vValue))
 #Else
     '--- the x86 declare types the int64 as Currency (raw bits = value*10000),
     '--- so scale the integral value down by 10000 to place it into those bits
-    BindInt64Value = vbsqlite3_bind_int64(hStmt, lIndex, CCur(CDec(vValue) / 10000))
+    BindInt64Value = stub_sqlite3_bind_int64(hStmt, lIndex, CCur(CDec(vValue) / 10000))
 #End If
 End Function
 
@@ -130,7 +130,7 @@ Public Function BindTextValue(ByVal hStmt As LongPtr, ByVal lIndex As Long, sTex
     If lLen = 0 Then
         ReDim baBuf(0 To 0)
     End If
-    BindTextValue = vbsqlite3_bind_text(hStmt, lIndex, VarPtr(baBuf(0)), lLen, SQLITE_TRANSIENT)
+    BindTextValue = stub_sqlite3_bind_text(hStmt, lIndex, VarPtr(baBuf(0)), lLen, SQLITE_TRANSIENT)
 End Function
 
 Public Function BindBlobValue(ByVal hStmt As LongPtr, ByVal lIndex As Long, baBuf() As Byte) As Long
@@ -138,11 +138,11 @@ Public Function BindBlobValue(ByVal hStmt As LongPtr, ByVal lIndex As Long, baBu
 
     lLen = pvArrayByteLen(baBuf)
     If lLen > 0 Then
-        BindBlobValue = vbsqlite3_bind_blob(hStmt, lIndex, VarPtr(baBuf(0)), lLen, SQLITE_TRANSIENT)
+        BindBlobValue = stub_sqlite3_bind_blob(hStmt, lIndex, VarPtr(baBuf(0)), lLen, SQLITE_TRANSIENT)
     Else
         '--- an empty (non-NULL) blob needs zeroblob; bind_blob with a NULL
         '--- pointer would bind SQL NULL instead
-        BindBlobValue = vbsqlite3_bind_zeroblob(hStmt, lIndex, 0)
+        BindBlobValue = stub_sqlite3_bind_zeroblob(hStmt, lIndex, 0)
     End If
 End Function
 
@@ -154,7 +154,7 @@ Public Function PrepareStatement(oCnn As cConnection, sSql As String) As LongPtr
         Err.Raise vbObjectError, "PrepareStatement", "No active connection"
     End If
     baSql = ToUtf8Array(sSql & vbNullChar)
-    If vbsqlite3_prepare_v2(oCnn.frDbHandle, VarPtr(baSql(0)), -1, VarPtr(hStmt), 0) <> SQLITE_OK Then
+    If stub_sqlite3_prepare_v2(oCnn.frDbHandle, VarPtr(baSql(0)), -1, VarPtr(hStmt), 0) <> SQLITE_OK Then
         Err.Raise vbObjectError, "PrepareStatement", oCnn.LastDBError()
     End If
     PrepareStatement = hStmt
@@ -162,13 +162,13 @@ End Function
 
 Public Function ReadColumnValue(ByVal hStmt As LongPtr, ByVal lCol As Long) As Variant
     '--- qualify the constants: cField.FieldType has case-identical members
-    Select Case vbsqlite3_column_type(hStmt, lCol)
+    Select Case stub_sqlite3_column_type(hStmt, lCol)
     Case mdSqliteApi.SQLITE_INTEGER
         ReadColumnValue = pvColumnInteger(hStmt, lCol)
     Case mdSqliteApi.SQLITE_FLOAT
-        ReadColumnValue = vbsqlite3_column_double(hStmt, lCol)
+        ReadColumnValue = stub_sqlite3_column_double(hStmt, lCol)
     Case mdSqliteApi.SQLITE_TEXT
-        ReadColumnValue = FromUtf8Ptr(vbsqlite3_column_text(hStmt, lCol))
+        ReadColumnValue = FromUtf8Ptr(stub_sqlite3_column_text(hStmt, lCol))
     Case mdSqliteApi.SQLITE_BLOB
         ReadColumnValue = pvColumnBlob(hStmt, lCol)
     Case Else
@@ -191,7 +191,7 @@ Public Function StmtParamIndex(ByVal hStmt As LongPtr, sName As String) As Long
 End Function
 
 Public Function StmtParamName(ByVal hStmt As LongPtr, ByVal lIndex As Long) As String
-    StmtParamName = FromUtf8Ptr(vbsqlite3_bind_parameter_name(hStmt, lIndex))
+    StmtParamName = FromUtf8Ptr(stub_sqlite3_bind_parameter_name(hStmt, lIndex))
 End Function
 
 Public Function QuoteIdentifier(sName As String) As String
@@ -242,7 +242,7 @@ Private Function pvParamIndex(ByVal hStmt As LongPtr, sName As String) As Long
     Dim baName()        As Byte
 
     baName = ToUtf8Array(sName & vbNullChar)
-    pvParamIndex = vbsqlite3_bind_parameter_index(hStmt, VarPtr(baName(0)))
+    pvParamIndex = stub_sqlite3_bind_parameter_index(hStmt, VarPtr(baName(0)))
 End Function
 
 Private Function pvColumnInteger(ByVal hStmt As LongPtr, ByVal lCol As Long) As Variant
@@ -250,9 +250,9 @@ Private Function pvColumnInteger(ByVal hStmt As LongPtr, ByVal lCol As Long) As 
 
     '--- recover the true int64: x86 returns raw bits as Currency (value*10000)
 #If Win64 Then
-    vDec = CDec(vbsqlite3_column_int64(hStmt, lCol))
+    vDec = CDec(stub_sqlite3_column_int64(hStmt, lCol))
 #Else
-    vDec = CDec(vbsqlite3_column_int64(hStmt, lCol)) * CDec(10000)
+    vDec = CDec(stub_sqlite3_column_int64(hStmt, lCol)) * CDec(10000)
 #End If
     If vDec >= -2147483648# And vDec <= 2147483647# Then
         pvColumnInteger = CLng(vDec)
@@ -266,9 +266,9 @@ Private Function pvColumnBlob(ByVal hStmt As LongPtr, ByVal lCol As Long) As Var
     Dim lPtr            As LongPtr
     Dim baBuf()         As Byte
 
-    lLen = vbsqlite3_column_bytes(hStmt, lCol)
+    lLen = stub_sqlite3_column_bytes(hStmt, lCol)
     If lLen > 0 Then
-        lPtr = vbsqlite3_column_blob(hStmt, lCol)
+        lPtr = stub_sqlite3_column_blob(hStmt, lCol)
         ReDim baBuf(0 To lLen - 1)
         Call CopyMemory(baBuf(0), ByVal lPtr, lLen)
         pvColumnBlob = baBuf

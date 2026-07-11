@@ -84,7 +84,7 @@ End Property
 Public Property Let BusyTimeOutSeconds(ByVal RHS As Double)
     m_dblBusyTimeout = RHS
     If m_hDb <> 0 Then
-        Call vbsqlite3_busy_timeout(m_hDb, CLng(RHS * 1000))
+        Call stub_sqlite3_busy_timeout(m_hDb, CLng(RHS * 1000))
     End If
 End Property
 
@@ -110,13 +110,13 @@ End Property
 
 Public Property Get AffectedRows() As Long
     If m_hDb <> 0 Then
-        AffectedRows = vbsqlite3_changes(m_hDb)
+        AffectedRows = stub_sqlite3_changes(m_hDb)
     End If
 End Property
 
 Public Property Get TotalAffectedRowsInSession() As Long
     If m_hDb <> 0 Then
-        TotalAffectedRowsInSession = vbsqlite3_total_changes(m_hDb)
+        TotalAffectedRowsInSession = stub_sqlite3_total_changes(m_hDb)
     End If
 End Property
 
@@ -156,7 +156,7 @@ Public Property Let CodecType(ByVal RHS As eCodecType)
 End Property
 
 Public Function Version() As String
-    Version = FromUtf8Ptr(vbsqlite3_libversion())
+    Version = FromUtf8Ptr(stub_sqlite3_libversion())
 End Function
 
 Public Function CheckIntegrity() As String
@@ -290,12 +290,12 @@ Public Function CopyDatabase(Optional ByVal DstDBFileName As String = ":memory:"
         Err.Raise vbObjectError, "cConnection.CopyDatabase", "Cannot create '" & DstDBFileName & "'"
     End If
     baMain = ToUtf8Array("main" & vbNullChar)
-    hBackup = vbsqlite3_backup_init(oDst.frDbHandle, VarPtr(baMain(0)), m_hDb, VarPtr(baMain(0)))
+    hBackup = stub_sqlite3_backup_init(oDst.frDbHandle, VarPtr(baMain(0)), m_hDb, VarPtr(baMain(0)))
     If hBackup = 0 Then
         Err.Raise vbObjectError, "cConnection.CopyDatabase", oDst.LastDBError()
     End If
-    lRc = vbsqlite3_backup_step(hBackup, -1)
-    Call vbsqlite3_backup_finish(hBackup)
+    lRc = stub_sqlite3_backup_step(hBackup, -1)
+    Call stub_sqlite3_backup_finish(hBackup)
     If lRc <> SQLITE_DONE Then
         Err.Raise vbObjectError, "cConnection.CopyDatabase", oDst.LastDBError()
     End If
@@ -311,7 +311,7 @@ End Sub
 
 Public Sub Cancel()
     If m_hDb <> 0 Then
-        Call vbsqlite3_interrupt(m_hDb)
+        Call stub_sqlite3_interrupt(m_hDb)
     End If
 End Sub
 
@@ -370,7 +370,7 @@ Public Function LastDBError() As String
 End Function
 
 Public Function GetSqliteErrStr(ByVal ResultCode As Long) As String
-    GetSqliteErrStr = FromUtf8Ptr(vbsqlite3_errstr(ResultCode))
+    GetSqliteErrStr = FromUtf8Ptr(stub_sqlite3_errstr(ResultCode))
 End Function
 
 Public Function LastDBErrCode(Optional ByVal GetExtendedCode As Boolean) As Long
@@ -378,9 +378,9 @@ Public Function LastDBErrCode(Optional ByVal GetExtendedCode As Boolean) As Long
         Exit Function
     End If
     If GetExtendedCode Then
-        LastDBErrCode = vbsqlite3_extended_errcode(m_hDb)
+        LastDBErrCode = stub_sqlite3_extended_errcode(m_hDb)
     Else
-        LastDBErrCode = vbsqlite3_errcode(m_hDb)
+        LastDBErrCode = stub_sqlite3_errcode(m_hDb)
     End If
 End Function
 
@@ -472,14 +472,14 @@ Private Function pvOpenDatabase(sFileName As String, ByVal lFlags As Long) As Bo
 
     pvCloseDatabase
     baFile = ToUtf8Array(sFileName & vbNullChar)
-    lRc = vbsqlite3_open_v2(VarPtr(baFile(0)), VarPtr(m_hDb), lFlags, 0)
+    lRc = stub_sqlite3_open_v2(VarPtr(baFile(0)), VarPtr(m_hDb), lFlags, 0)
     If lRc <> SQLITE_OK Then
         pvCloseDatabase
         Exit Function
     End If
     m_sFileName = sFileName
     If m_dblBusyTimeout > 0 Then
-        Call vbsqlite3_busy_timeout(m_hDb, CLng(m_dblBusyTimeout * 1000))
+        Call stub_sqlite3_busy_timeout(m_hDb, CLng(m_dblBusyTimeout * 1000))
     End If
     pvOpenDatabase = True
 End Function
@@ -487,7 +487,7 @@ End Function
 Private Sub pvCloseDatabase()
     If m_hDb <> 0 Then
         UdfReleaseDb m_hDb
-        Call vbsqlite3_close_v2(m_hDb)
+        Call stub_sqlite3_close_v2(m_hDb)
         m_hDb = 0
     End If
     Do While m_cTransactionStack.Count > 0
@@ -503,7 +503,7 @@ Private Function pvExec(sSql As String) As Long
         Exit Function
     End If
     baSql = ToUtf8Array(sSql & vbNullChar)
-    pvExec = vbsqlite3_exec(m_hDb, VarPtr(baSql(0)), 0, 0, 0)
+    pvExec = stub_sqlite3_exec(m_hDb, VarPtr(baSql(0)), 0, 0, 0)
 End Function
 
 Friend Sub frExecCmd(sSql As String, aParams() As Variant)
@@ -516,7 +516,7 @@ Friend Sub frExecCmd(sSql As String, aParams() As Variant)
         Err.Raise vbObjectError, "cConnection.ExecCmd", "Database is not open"
     End If
     baSql = ToUtf8Array(sSql & vbNullChar)
-    If vbsqlite3_prepare_v2(m_hDb, VarPtr(baSql(0)), -1, VarPtr(hStmt), 0) <> SQLITE_OK Then
+    If stub_sqlite3_prepare_v2(m_hDb, VarPtr(baSql(0)), -1, VarPtr(hStmt), 0) <> SQLITE_OK Then
         Err.Raise vbObjectError, "cConnection.ExecCmd", pvLastError()
     End If
     On Error GoTo EH
@@ -527,15 +527,15 @@ Friend Sub frExecCmd(sSql As String, aParams() As Variant)
     Next
     '--- run to completion (tolerate a statement that yields rows)
     Do
-        lRc = vbsqlite3_step(hStmt)
+        lRc = stub_sqlite3_step(hStmt)
     Loop While lRc = SQLITE_ROW
     If lRc <> SQLITE_DONE Then
         Err.Raise vbObjectError, "cConnection.ExecCmd", pvLastError()
     End If
-    Call vbsqlite3_finalize(hStmt)
+    Call stub_sqlite3_finalize(hStmt)
     Exit Sub
 EH:
-    Call vbsqlite3_finalize(hStmt)
+    Call stub_sqlite3_finalize(hStmt)
     Err.Raise Err.Number, Err.Source, Err.Description
 End Sub
 
@@ -547,11 +547,11 @@ Private Function pvGetScalarLong(sSql As String) As Long
         Exit Function
     End If
     baSql = ToUtf8Array(sSql & vbNullChar)
-    If vbsqlite3_prepare_v2(m_hDb, VarPtr(baSql(0)), -1, VarPtr(hStmt), 0) = SQLITE_OK Then
-        If vbsqlite3_step(hStmt) = SQLITE_ROW Then
-            pvGetScalarLong = vbsqlite3_column_int(hStmt, 0)
+    If stub_sqlite3_prepare_v2(m_hDb, VarPtr(baSql(0)), -1, VarPtr(hStmt), 0) = SQLITE_OK Then
+        If stub_sqlite3_step(hStmt) = SQLITE_ROW Then
+            pvGetScalarLong = stub_sqlite3_column_int(hStmt, 0)
         End If
-        Call vbsqlite3_finalize(hStmt)
+        Call stub_sqlite3_finalize(hStmt)
     End If
 End Function
 
@@ -563,11 +563,11 @@ Private Function pvGetScalarText(sSql As String) As String
         Exit Function
     End If
     baSql = ToUtf8Array(sSql & vbNullChar)
-    If vbsqlite3_prepare_v2(m_hDb, VarPtr(baSql(0)), -1, VarPtr(hStmt), 0) = SQLITE_OK Then
-        If vbsqlite3_step(hStmt) = SQLITE_ROW Then
-            pvGetScalarText = FromUtf8Ptr(vbsqlite3_column_text(hStmt, 0))
+    If stub_sqlite3_prepare_v2(m_hDb, VarPtr(baSql(0)), -1, VarPtr(hStmt), 0) = SQLITE_OK Then
+        If stub_sqlite3_step(hStmt) = SQLITE_ROW Then
+            pvGetScalarText = FromUtf8Ptr(stub_sqlite3_column_text(hStmt, 0))
         End If
-        Call vbsqlite3_finalize(hStmt)
+        Call stub_sqlite3_finalize(hStmt)
     End If
 End Function
 
@@ -579,15 +579,15 @@ Private Function pvLastInsertId() As Variant
     '--- on x86 the API returns the raw int64 bits reinterpreted as Currency
     '--- (value * 10000), so scale back up through Decimal to recover it
 #If Win64 Then
-    pvLastInsertId = vbsqlite3_last_insert_rowid(m_hDb)
+    pvLastInsertId = stub_sqlite3_last_insert_rowid(m_hDb)
 #Else
-    pvLastInsertId = CDec(vbsqlite3_last_insert_rowid(m_hDb)) * CDec(10000)
+    pvLastInsertId = CDec(stub_sqlite3_last_insert_rowid(m_hDb)) * CDec(10000)
 #End If
 End Function
 
 Private Function pvLastError() As String
     If m_hDb <> 0 Then
-        pvLastError = FromUtf8Ptr(vbsqlite3_errmsg(m_hDb))
+        pvLastError = FromUtf8Ptr(stub_sqlite3_errmsg(m_hDb))
     End If
 End Function
 

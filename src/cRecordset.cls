@@ -508,7 +508,7 @@ Friend Sub frOpenParams(oCnn As cConnection, sSql As String, aParams() As Varian
     Exit Sub
 EH:
     '--- a bind error must not leak the statement
-    Call vbsqlite3_finalize(hStmt)
+    Call stub_sqlite3_finalize(hStmt)
     Err.Raise Err.Number, Err.Source, Err.Description
 End Sub
 
@@ -672,12 +672,12 @@ Private Sub pvMaterialize(ByVal hStmt As LongPtr, Optional ByVal bFinalize As Bo
     Dim lCap            As Long
     Dim lRc             As Long
 
-    m_lFieldCount = vbsqlite3_column_count(hStmt)
+    m_lFieldCount = stub_sqlite3_column_count(hStmt)
     lCap = 16
     If m_lFieldCount > 0 Then
         ReDim m_aFieldName(0 To m_lFieldCount - 1)
         For lCol = 0 To m_lFieldCount - 1
-            m_aFieldName(lCol) = FromUtf8Ptr(vbsqlite3_column_name(hStmt, lCol))
+            m_aFieldName(lCol) = FromUtf8Ptr(stub_sqlite3_column_name(hStmt, lCol))
         Next
         ReDim m_aData(0 To m_lFieldCount - 1, 0 To lCap - 1)
     End If
@@ -685,7 +685,7 @@ Private Sub pvMaterialize(ByVal hStmt As LongPtr, Optional ByVal bFinalize As Bo
     pvAnalyzeUpdatable
     lRow = 0
     Do
-        lRc = vbsqlite3_step(hStmt)
+        lRc = stub_sqlite3_step(hStmt)
         If lRc <> SQLITE_ROW Then
             Exit Do
         End If
@@ -701,7 +701,7 @@ Private Sub pvMaterialize(ByVal hStmt As LongPtr, Optional ByVal bFinalize As Bo
         lRow = lRow + 1
     Loop
     If bFinalize Then
-        Call vbsqlite3_finalize(hStmt)
+        Call stub_sqlite3_finalize(hStmt)
     End If
     '--- a step error (e.g. a UDF calling SetResultError) fails the load
     If lRc <> SQLITE_DONE Then
@@ -802,10 +802,10 @@ Private Sub pvCaptureColumnMeta(ByVal hStmt As LongPtr)
     ReDim m_aOrigDb(0 To m_lFieldCount - 1)
     ReDim m_aDeclType(0 To m_lFieldCount - 1)
     For lCol = 0 To m_lFieldCount - 1
-        m_aOrigColumn(lCol) = FromUtf8Ptr(vbsqlite3_column_origin_name(hStmt, lCol))
-        m_aOrigTable(lCol) = FromUtf8Ptr(vbsqlite3_column_table_name(hStmt, lCol))
-        m_aOrigDb(lCol) = FromUtf8Ptr(vbsqlite3_column_database_name(hStmt, lCol))
-        m_aDeclType(lCol) = FromUtf8Ptr(vbsqlite3_column_decltype(hStmt, lCol))
+        m_aOrigColumn(lCol) = FromUtf8Ptr(stub_sqlite3_column_origin_name(hStmt, lCol))
+        m_aOrigTable(lCol) = FromUtf8Ptr(stub_sqlite3_column_table_name(hStmt, lCol))
+        m_aOrigDb(lCol) = FromUtf8Ptr(stub_sqlite3_column_database_name(hStmt, lCol))
+        m_aDeclType(lCol) = FromUtf8Ptr(stub_sqlite3_column_decltype(hStmt, lCol))
     Next
 End Sub
 
@@ -875,23 +875,23 @@ Private Function pvGetPkColumns(sSinglePkType As String) As String()
     ReDim aName(0 To 3)
     ReDim aPos(0 To 3)
     hStmt = PrepareStatement(m_oConnection, "PRAGMA " & QuoteIdentifier(m_sOrigDb) & ".table_info(" & QuoteIdentifier(m_sOrigTable) & ")")
-    Do While vbsqlite3_step(hStmt) = SQLITE_ROW
+    Do While stub_sqlite3_step(hStmt) = SQLITE_ROW
         '--- table_info columns: cid, name, type, notnull, dflt_value, pk
-        lPk = vbsqlite3_column_int(hStmt, 5)
+        lPk = stub_sqlite3_column_int(hStmt, 5)
         If lPk > 0 Then
             If lCount > UBound(aName) Then
                 ReDim Preserve aName(0 To 2 * lCount)
                 ReDim Preserve aPos(0 To 2 * lCount)
             End If
-            aName(lCount) = FromUtf8Ptr(vbsqlite3_column_text(hStmt, 1))
+            aName(lCount) = FromUtf8Ptr(stub_sqlite3_column_text(hStmt, 1))
             aPos(lCount) = lPk
             If lPk = 1 Then
-                sSinglePkType = FromUtf8Ptr(vbsqlite3_column_text(hStmt, 2))
+                sSinglePkType = FromUtf8Ptr(stub_sqlite3_column_text(hStmt, 2))
             End If
             lCount = lCount + 1
         End If
     Loop
-    Call vbsqlite3_finalize(hStmt)
+    Call stub_sqlite3_finalize(hStmt)
     m_lPkCount = lCount
     If lCount > 0 Then
         ReDim aRet(0 To lCount - 1)
@@ -1056,15 +1056,15 @@ Private Sub pvExecParams(sSql As String, aParams() As Variant)
         End If
     Next
     Do
-        lRc = vbsqlite3_step(hStmt)
+        lRc = stub_sqlite3_step(hStmt)
     Loop While lRc = SQLITE_ROW
     If lRc <> SQLITE_DONE Then
         Err.Raise vbObjectError, "cRecordset.UpdateBatch", m_oConnection.LastDBError()
     End If
-    Call vbsqlite3_finalize(hStmt)
+    Call stub_sqlite3_finalize(hStmt)
     Exit Sub
 EH:
-    Call vbsqlite3_finalize(hStmt)
+    Call stub_sqlite3_finalize(hStmt)
     Err.Raise Err.Number, Err.Source, Err.Description
 End Sub
 
