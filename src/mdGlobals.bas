@@ -163,13 +163,13 @@ End Function
 Public Function ReadColumnValue(ByVal hStmt As LongPtr, ByVal lCol As Long) As Variant
     '--- qualify the constants: cField.FieldType has case-identical members
     Select Case stub_sqlite3_column_type(hStmt, lCol)
-    Case mdSqliteApi.SQLITE_INTEGER
+    Case sqlite3win32helper.SQLITE_INTEGER
         ReadColumnValue = pvColumnInteger(hStmt, lCol)
-    Case mdSqliteApi.SQLITE_FLOAT
+    Case sqlite3win32helper.SQLITE_FLOAT
         ReadColumnValue = stub_sqlite3_column_double(hStmt, lCol)
-    Case mdSqliteApi.SQLITE_TEXT
+    Case sqlite3win32helper.SQLITE_TEXT
         ReadColumnValue = FromUtf8Ptr(stub_sqlite3_column_text(hStmt, lCol))
-    Case mdSqliteApi.SQLITE_BLOB
+    Case sqlite3win32helper.SQLITE_BLOB
         ReadColumnValue = pvColumnBlob(hStmt, lCol)
     Case Else
         ReadColumnValue = Null

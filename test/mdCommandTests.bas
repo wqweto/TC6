@@ -175,7 +175,7 @@ Private Sub Test_Cursor()
     AssertEqLng oCursor.StepCounter, 0, "Reset zeroes StepCounter"
     AssertTrue oCursor.Step(), "Step works again after Reset"
     AssertEqLng CLng(oCursor.ColVal(0)), 2, "first row again after Reset"
-    AssertEqLng oCursor.ColType(0), mdSqliteApi.SQLITE_INTEGER, "ColType INTEGER"
+    AssertEqLng oCursor.ColType(0), sqlite3win32helper.SQLITE_INTEGER, "ColType INTEGER"
     TestEnd
     Exit Sub
 EH:

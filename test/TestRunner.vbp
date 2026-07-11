@@ -30,7 +30,8 @@ Class=cTestHost; cTestHost.cls
 Class=cTestFuncs; cTestFuncs.cls
 Class=cTestAgg; cTestAgg.cls
 Class=cTestColl; cTestColl.cls
-Module=mdSqliteApi; ..\src\mdSqliteApi.bas
+Module=sqlite3win32stubs; ..\src\sqlite3win32stubs.bas
+Module=sqlite3win32helper; ..\src\sqlite3win32helper.bas
 Module=mdGlobals; ..\src\mdGlobals.bas
 Module=mdUdf; ..\src\mdUdf.bas
 Module=mdTestRunner; mdTestRunner.bas
@@ -52,7 +53,7 @@ MinorVer=0
 RevisionVer=0
 AutoIncrementVer=0
 ServerSupportFiles=0
-VersionCompanyName="Unicontsoft"
+VersionCompanyName="wqweto@gmail.com"
 CompilationType=0
 OptimizationType=0
 FavorPentiumPro(tm)=0
@@ -69,3 +70,7 @@ Retained=0
 ThreadPerObject=0
 MaxNumberOfThreads=1
 ThreadingModel=1
+
+[VBCompiler]
+LinkSwitches=KERNEL32.LIB /OPT:NOREF /OPT:NOWIN98
+LinkBefore=replace_cobj.bat

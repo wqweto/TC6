@@ -81,7 +81,7 @@ Public Function GetDateTime(ByVal ParamIdxOneBased As Long) As Date
 
     lpValue = pvValue(ParamIdxOneBased)
     Select Case stub_sqlite3_value_type(lpValue)
-    Case mdSqliteApi.SQLITE_TEXT
+    Case sqlite3win32helper.SQLITE_TEXT
         GetDateTime = pvParseIsoDate(FromUtf8Ptr(stub_sqlite3_value_text(lpValue)))
     Case Else
         GetDateTime = CDate(stub_sqlite3_value_double(lpValue))
