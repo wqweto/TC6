@@ -180,11 +180,11 @@ Public Sub ReKey(Optional NewEncrKey As String)
 End Sub
 
 Public Sub AttachDataBase(FileName As String, DataBaseName As String, Optional EncrKey As String)
-    Execute "ATTACH DATABASE " & pvQuoteStr(FileName) & " AS " & pvQuoteId(DataBaseName)
+    Execute "ATTACH DATABASE " & QuoteString(FileName) & " AS " & QuoteIdentifier(DataBaseName)
 End Sub
 
 Public Sub DetachDataBase(DataBaseName As String)
-    Execute "DETACH DATABASE " & pvQuoteId(DataBaseName)
+    Execute "DETACH DATABASE " & QuoteIdentifier(DataBaseName)
 End Sub
 
 Public Function OpenRecordset(SQL As String, Optional ByVal ReadOnly As Boolean) As cRecordset
@@ -213,7 +213,7 @@ Public Sub BeginTrans(Optional SavePointName As String)
     Else
         sName = SavePointName
     End If
-    Execute "SAVEPOINT " & pvQuoteId(sName)
+    Execute "SAVEPOINT " & QuoteIdentifier(sName)
     m_cTransactionStack.Add sName
 End Sub
 
@@ -229,7 +229,7 @@ Public Sub CommitTrans(Optional SavePointName As String)
         Execute "COMMIT"
         RaiseEvent CommitTransComplete
     Else
-        Execute "RELEASE SAVEPOINT " & pvQuoteId(sName)
+        Execute "RELEASE SAVEPOINT " & QuoteIdentifier(sName)
         RaiseEvent SavePointReleased(sName)
         RaiseEvent CommitForSavePointComplete(sName)
     End If
@@ -243,9 +243,9 @@ Public Sub RollbackTrans(Optional ToSavePointName As String, Optional ByVal ReUs
     End If
     '--- rollback to a named savepoint without unwinding the whole transaction
     If Len(ToSavePointName) > 0 Then
-        Execute "ROLLBACK TO SAVEPOINT " & pvQuoteId(ToSavePointName)
+        Execute "ROLLBACK TO SAVEPOINT " & QuoteIdentifier(ToSavePointName)
         If Not ReUseSavePointForNewAttempts Then
-            Execute "RELEASE SAVEPOINT " & pvQuoteId(ToSavePointName)
+            Execute "RELEASE SAVEPOINT " & QuoteIdentifier(ToSavePointName)
             pvPopTo ToSavePointName
         End If
         RaiseEvent RollbackToSavePointComplete(ToSavePointName)
@@ -258,8 +258,8 @@ Public Sub RollbackTrans(Optional ToSavePointName As String, Optional ByVal ReUs
         Execute "ROLLBACK"
         RaiseEvent RollbackTransComplete
     Else
-        Execute "ROLLBACK TO SAVEPOINT " & pvQuoteId(sName)
-        Execute "RELEASE SAVEPOINT " & pvQuoteId(sName)
+        Execute "ROLLBACK TO SAVEPOINT " & QuoteIdentifier(sName)
+        Execute "RELEASE SAVEPOINT " & QuoteIdentifier(sName)
         RaiseEvent RollbackToSavePointComplete(sName)
     End If
 End Sub
@@ -534,14 +534,6 @@ Private Sub pvPopTo(sName As String)
         m_cTransactionStack.Remove m_cTransactionStack.Count
     Loop
 End Sub
-
-Private Function pvQuoteId(sName As String) As String
-    pvQuoteId = """" & Replace(sName, """", """""") & """"
-End Function
-
-Private Function pvQuoteStr(sText As String) As String
-    pvQuoteStr = "'" & Replace(sText, "'", "''") & "'"
-End Function
 
 Private Sub Class_Initialize()
     Set m_cTransactionStack = New VBA.Collection

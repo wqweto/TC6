@@ -290,8 +290,22 @@ type. `cTestHost` is `MultiUse`.
       with typed `Set*` binds and named-parameter lookup (see section below);
       statement helpers (`PrepareStatement`/`ReadColumnValue`/`StmtParam*`)
       shared in `mdGlobals`.
-- [ ] `cRecordset` write surface (AddNew/Delete/UpdateBatch/ResetChanges),
-      Sort/Find, Content serialization, ADO interop, JSON export.
+- [x] `cRecordset` batched write surface — field writes, `AddNew`/`Delete`/
+      `UpdateBatch`/`ResetChanges`/`ContainsChanges`, PK-addressed write-back
+      (see section below).
+- [x] ~~Split `cRecordset` into a facade over an internal `cRowset`~~ —
+      **rejected, not going to implement.** The proposal (strong `cRowset`
+      references, orphaned fields stay readable) would diverge from the
+      original: verified against RC6.dll 3.42.0 that an orphaned RC6 field
+      raises exactly **err 91** on *every* recordset-dependent get/let
+      (`Value`/`Name`/`ColumnType`/`ActualSize`/`Changed`/`OriginalValue`/
+      `UnderlyingValue`/`Updateable`/…) while `IndexInFieldList` keeps
+      working. The current weak-ref implementation (`cField.pvRs` raises 91
+      on the zeroed pointer **before** any dereference — the raw deref used
+      to AV in late-bound paths) matches RC6 member-for-member and is kept
+      as final; the two lifetime tests pin the contract.
+- [ ] `cRecordset` Sort/Find, Content serialization, ADO interop, JSON
+      export.
 - [ ] Schema objects (`cDataBase(s)`/`cTable(s)`/`cColumn(s)`/…), `cMemDB`,
       UDF/collation registration (`IFunction`/`IAggregateFunction`/
       `ICollation` callbacks).
@@ -411,9 +425,30 @@ by `cConnection.OpenRecordset`/`OpenSchema` (`frOpen`), or via the public
   its whole result matrix) alive forever. Proven by the `NoReferenceCycle`
   test: a module-level `g_lLiveRecordsets` (bumped in `Class_Initialize`/
   `Terminate`) returns to baseline after a recordset goes out of scope.
-- **Left raising `Not implemented`**: the write surface (`AddNew`/`Delete`/
-  `UpdateBatch`/`ResetChanges`/`ValueMatrix` set/`cField.Value` set), `Sort`/
-  `Find*`, `Content*`, `ToJSONUTF8`, `GetRowsWithHeaders`, ADO interop.
+  This weak-ref design is **final**: it matches the original RC6, where an
+  orphaned field raises err 91 on every recordset-dependent member while
+  `IndexInFieldList` keeps working (verified against RC6.dll 3.42.0). A
+  facade + `cRowset` split with strong references was considered and
+  rejected — it would diverge from RC6 by keeping orphaned fields readable.
+- **Batched write surface**: opening a recordset analyses updatability —
+  every table-backed result column must originate in **one** table
+  (`column_table_name`/`column_origin_name`/`column_database_name` statement
+  metadata) and all of that table's PK columns (`PRAGMA table_info`, `pk`
+  ordinal) must be present in the result; `Updatable`/`cField.Updateable`
+  expose the verdict (expression columns are never writable). Field writes
+  (`cField.Value` Let, `ValueMatrix` Let) capture the cell's original on
+  first change; `AddNew` appends an all-`Null` row; `Delete` removes the
+  current row keeping a full snapshot. `UpdateBatch` writes everything back
+  inside a `tc6_updatebatch` savepoint — `DELETE`/`UPDATE` (dirty columns
+  only) address rows by `WHERE pk = ?` using **original** PK values,
+  `INSERT` sends all table-backed columns (a `Null` single-column INTEGER
+  PK auto-assigns; the new rowid is backfilled into the cell via
+  `last_insert_rowid`) — and rolls back to the savepoint on any error.
+  `ResetChanges(ResetAll/DeletesOnly/InsertsOnly/UpdatesOnly)` discards
+  pending changes (restoring deleted-row snapshots); `ContainsChanges` and
+  `cField.Changed`/`OriginalValue` report pending state.
+- **Left raising `Not implemented`**: `Sort`/`Find*`, `Content*`,
+  `ToJSONUTF8`, `GetRowsWithHeaders`, ADO interop.
 
 **Gotcha:** `cField`'s `FieldType` enum (`SQLite_INTEGER`…) collides
 case-insensitively with `mdSqliteApi`'s `SQLITE_INTEGER`… constants. VB6 only

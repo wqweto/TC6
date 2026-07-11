@@ -16,6 +16,11 @@ Public Sub RunRecordsetTests()
     Test_NoReferenceCycle
     Test_FieldOutlivesRecordset
     Test_FieldInvalidAfterReQuery
+    Test_UpdatableAnalysis
+    Test_UpdateBatchModify
+    Test_AddNewInsert
+    Test_DeleteBatch
+    Test_ResetChanges
 End Sub
 
 Private Function pvSeededDb() As cConnection
@@ -213,49 +218,162 @@ Private Sub pvMakeAndDropRecordset()
     '--- all locals released on return; the recordset must terminate here
 End Sub
 
-Private Sub Test_FieldOutlivesRecordset()
-    Dim oField          As cField
-    Dim vValue          As Variant
+Private Sub Test_UpdatableAnalysis()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
     Dim bRaised         As Boolean
 
-    If Not TestBegin("cRecordset.FieldOutlivesRecordset") Then Exit Sub
+    If Not TestBegin("cRecordset.UpdatableAnalysis") Then Exit Sub
     On Error GoTo EH
-    '--- oField survives the recordset; frTerminate must have zeroed its weak
-    '--- pointer so this fails safely instead of dereferencing freed memory
-    Set oField = pvOrphanField()
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name FROM t")
+    AssertTrue oRs.Updatable, "single-table select with PK is updatable"
+    AssertTrue oRs.Fields("name").Updateable, "table column is updateable"
+    Set oRs = oCnn.OpenRecordset("SELECT id, name FROM t", ReadOnly:=True)
+    AssertTrue Not oRs.Updatable, "ReadOnly open is not updatable"
+    Set oRs = oCnn.OpenRecordset("SELECT COUNT(*) AS n FROM t")
+    AssertTrue Not oRs.Updatable, "expression-only select is not updatable"
     On Error Resume Next
-    vValue = oField.Value
+    oRs.Fields("n").Value = 42
     bRaised = (Err.Number <> 0)
     On Error GoTo EH
-    AssertTrue bRaised, "field access after its recordset is freed raises (no crash)"
+    AssertTrue bRaised, "writing a non-updatable recordset raises"
+    Set oRs = oCnn.OpenRecordset("SELECT name FROM t")
+    AssertTrue Not oRs.Updatable, "select without the PK column is not updatable"
     TestEnd
     Exit Sub
 EH:
     TestErr
 End Sub
 
-Private Sub Test_FieldInvalidAfterReQuery()
+Private Sub Test_UpdateBatchModify()
     Dim oCnn            As cConnection
     Dim oRs             As cRecordset
-    Dim oOldField       As cField
-    Dim vValue          As Variant
-    Dim bRaised         As Boolean
 
-    If Not TestBegin("cRecordset.FieldInvalidAfterReQuery") Then Exit Sub
+    If Not TestBegin("cRecordset.UpdateBatchModify") Then Exit Sub
     On Error GoTo EH
     Set oCnn = pvSeededDb()
-    Set oRs = oCnn.OpenRecordset("SELECT id FROM t ORDER BY id")
-    Set oOldField = oRs.Fields(0)
-    AssertEqLng CLng(oOldField.Value), 1, "field reads its cell before ReQuery"
-    oRs.ReQuery
-    '--- ReQuery rebuilds the fields; the field held from the prior load must
-    '--- be invalidated, not silently bound to the new result set
-    On Error Resume Next
-    vValue = oOldField.Value
-    bRaised = (Err.Number <> 0)
+    Set oRs = oCnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    AssertTrue Not oRs.ContainsChanges, "no changes after open"
+    oRs.Fields("name").Value = "ALPHA"
+    AssertTrue oRs.ContainsChanges, "ContainsChanges after field write"
+    AssertTrue oRs.Fields("name").Changed, "field reports Changed"
+    AssertEqStr CStr(oRs.Fields("name").OriginalValue), "alpha", "OriginalValue keeps pre-change value"
+    AssertEqStr CStr(oRs.Fields("name").Value), "ALPHA", "Value returns pending value"
+    '--- second row via ValueMatrix write
+    oRs.ValueMatrix(1, 2) = 9.5
+    oRs.UpdateBatch
+    AssertTrue Not oRs.ContainsChanges, "no changes after UpdateBatch"
+    AssertTrue Not oRs.Fields("name").Changed, "field clean after UpdateBatch"
+    '--- verify persisted independently
+    Set oRs = oCnn.GetRs("SELECT name, score FROM t WHERE id = ?", 1)
+    AssertEqStr CStr(oRs.Fields("name").Value), "ALPHA", "update persisted"
+    Set oRs = oCnn.GetRs("SELECT score FROM t WHERE id = ?", 2)
+    AssertTrue oRs.Fields("score").Value = 9.5, "ValueMatrix write persisted"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_AddNewInsert()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+
+    If Not TestBegin("cRecordset.AddNewInsert") Then Exit Sub
     On Error GoTo EH
-    AssertTrue bRaised, "field held across ReQuery is invalidated (raises)"
-    AssertEqLng CLng(oRs.Fields(0).Value), 1, "fresh field after ReQuery works"
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    oRs.AddNew
+    AssertEqLng oRs.AbsolutePosition, 3, "positioned on the new row"
+    AssertEqLng oRs.RecordCount, 4, "RecordCount includes pending insert"
+    oRs.Fields("name").Value = "delta"
+    oRs.Fields("score").Value = 4.5
+    oRs.UpdateBatch
+    AssertEqLng CLng(oRs.Fields("id").Value), 4, "INTEGER PK backfilled from last rowid"
+    Set oRs = oCnn.GetRs("SELECT name FROM t WHERE id = ?", 4)
+    AssertEqLng oRs.RecordCount, 1, "inserted row present in DB"
+    AssertEqStr CStr(oRs.Fields("name").Value), "delta", "inserted values persisted"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_DeleteBatch()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+
+    If Not TestBegin("cRecordset.DeleteBatch") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name FROM t ORDER BY id")
+    oRs.MoveFirst
+    oRs.Delete
+    AssertEqLng oRs.RecordCount, 2, "RecordCount drops on Delete"
+    AssertEqLng CLng(oRs.Fields("id").Value), 2, "positioned on the following row"
+    AssertTrue oRs.ContainsChanges, "delete is a pending change"
+    oRs.UpdateBatch
+    Set oRs = oCnn.GetRs("SELECT COUNT(*) AS n FROM t WHERE id = ?", 1)
+    AssertEqLng CLng(oRs.Fields("n").Value), 0, "row deleted from DB"
+    Set oRs = oCnn.GetRs("SELECT COUNT(*) AS n FROM t")
+    AssertEqLng CLng(oRs.Fields("n").Value), 2, "other rows intact"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_ResetChanges()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+
+    If Not TestBegin("cRecordset.ResetChanges") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name FROM t ORDER BY id")
+    '--- queue one of each pending change, then discard them all
+    oRs.Fields("name").Value = "changed"
+    oRs.AddNew
+    oRs.Fields("name").Value = "pending"
+    oRs.MoveLast
+    oRs.MoveFirst
+    oRs.MoveNext
+    oRs.Delete
+    AssertTrue oRs.ContainsChanges, "changes pending before reset"
+    oRs.ResetChanges
+    AssertTrue Not oRs.ContainsChanges, "no changes after ResetChanges"
+    AssertEqLng oRs.RecordCount, 3, "RecordCount restored (insert dropped, delete restored)"
+    oRs.MoveFirst
+    AssertEqStr CStr(oRs.Fields("name").Value), "alpha", "modified value restored"
+    '--- DB never touched
+    Set oRs = oCnn.GetRs("SELECT COUNT(*) AS n FROM t")
+    AssertEqLng CLng(oRs.Fields("n").Value), 3, "DB unchanged by discarded edits"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+'--- these two tests pin the FINAL contract, matching original RC6 behavior
+'--- (verified against RC6.dll 3.42.0): an orphaned/stale cField raises
+'--- error 91 on every recordset-dependent member (a cRowset split that
+'--- would keep it readable was considered and rejected)
+Private Sub Test_FieldOutlivesRecordset()
+    Dim oField          As cField
+    Dim vValue          As Variant
+    Dim lErr            As Long
+
+    If Not TestBegin("cRecordset.FieldOutlivesRecordset") Then Exit Sub
+    On Error GoTo EH
+    '--- oField survives the recordset; frTerminate zeroed its weak pointer,
+    '--- so pvRs bails out with error 91 before any dereference (no AV)
+    Set oField = pvOrphanField()
+    On Error Resume Next
+    vValue = oField.Value
+    lErr = Err.Number
+    On Error GoTo EH
+    AssertEqLng lErr, 91, "field access after its recordset is freed raises 91 (no crash)"
     TestEnd
     Exit Sub
 EH:
@@ -272,6 +390,34 @@ Private Function pvOrphanField() As cField
     '--- oRs (and oCnn) released on return -> cRecordset.Class_Terminate ->
     '--- cFields.frTerminate -> cField.frTerminate clears the weak pointer
 End Function
+
+Private Sub Test_FieldInvalidAfterReQuery()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+    Dim oOldField       As cField
+    Dim vValue          As Variant
+    Dim lErr            As Long
+
+    If Not TestBegin("cRecordset.FieldInvalidAfterReQuery") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id FROM t ORDER BY id")
+    Set oOldField = oRs.Fields(0)
+    AssertEqLng CLng(oOldField.Value), 1, "field reads its cell before ReQuery"
+    oRs.ReQuery
+    '--- ReQuery rebuilds the fields; the field held from the prior load must
+    '--- be invalidated, not silently bound to the new result set
+    On Error Resume Next
+    vValue = oOldField.Value
+    lErr = Err.Number
+    On Error GoTo EH
+    AssertEqLng lErr, 91, "field held across ReQuery is invalidated (raises 91)"
+    AssertEqLng CLng(oRs.Fields(0).Value), 1, "fresh field after ReQuery works"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
 
 Private Sub Test_OpenSchema()
     Dim oCnn            As cConnection

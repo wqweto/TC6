@@ -175,6 +175,14 @@ Public Function StmtParamName(ByVal hStmt As LongPtr, ByVal lIndex As Long) As S
     StmtParamName = FromUtf8Ptr(vbsqlite3_bind_parameter_name(hStmt, lIndex))
 End Function
 
+Public Function QuoteIdentifier(sName As String) As String
+    QuoteIdentifier = """" & Replace(sName, """", """""") & """"
+End Function
+
+Public Function QuoteString(sText As String) As String
+    QuoteString = "'" & Replace(sText, "'", "''") & "'"
+End Function
+
 Private Function pvParamIndex(ByVal hStmt As LongPtr, sName As String) As Long
     Dim baName()        As Byte
 
