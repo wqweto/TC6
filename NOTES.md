@@ -310,10 +310,33 @@ type. `cTestHost` is `MultiUse`.
       below).
 - [x] `cRecordset` `Sort`/`SortRefresh` + `Find*` — in-memory multi-key
       sort and ADO-style criterion scan (see the cRecordset section).
-- [ ] `cRecordset` Content serialization, ADO interop, JSON export.
-- [ ] `cMemDB`, `CopyDatabase` (`sqlite3_backup_*`), UDF/collation
-      registration (`IFunction`/`IAggregateFunction`/`ICollation`
-      callbacks + `cUDFMethods`).
+- [ ] Remaining stubs, in planned order:
+      1. `cField` metadata getters (`DefaultValue`/`Original*`/
+         `CollationSequence`/`NotNullConstraint`/`PrimaryKey`/
+         `AutoIncrement`/`UniqueConstraint`/`DefinedSize`) — the analysis
+         already has origin db/table/column; rest via `column_decltype` +
+         `table_column_metadata`.
+      2. `cMemDB` (delegation to an internal `:memory:` connection +
+         aggregate helpers) + `cConnection.MemDB` and `CreateTable`/
+         `NewFieldDefs` (FieldDefs → DDL).
+      3. `cConnection.CopyDatabase` (`sqlite3_backup_*`).
+      4. `UniqueID64` machinery (`cConnection.UniqueID64`,
+         `cRecordset.UniqueID64`/`UniqueID64ToVBDate`/
+         `AutoCreateUniqueID64`) — probe RC6.dll first to match format.
+      5. UDF/collation subsystem: `cUDFMethods` + `cConnection.Add/
+         RemoveUserDefined*` over `create_function_v2`/`create_collation`
+         AddressOf trampolines (`IFunction`/`IAggregateFunction`/
+         `ICollation` stay empty by design — users Implements them).
+      6. Content serialization (`Content`/`ContentChangesOnly`/
+         `CreateTableFromRsContent`/`GetADORsFromContent`), `ToJSONUTF8`,
+         `GetRowsWithHeaders` — needs a blob-format decision
+         (RC6-compatible vs TC6-own).
+      7. Tail / possibly out of scope for v1: DDL-parsing members
+         (`cColumn.OriginalConstraint`/`ConstraintName`/`CheckExpression`/
+         `PrimarySortOrder`, `cTable.Constraint`), `cCommand`/
+         `cSelectCommand.Save` + `Repl*`, ADO interop (`cConverter`,
+         `CreateTableFromADORs`, `DataSource`), `cDBAccess` (RC6 thread
+         marshalling).
 
 ## [src/cConnection.cls](src/cConnection.cls) — connection wrapper
 
