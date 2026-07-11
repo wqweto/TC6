@@ -286,10 +286,15 @@ type. `cTestHost` is `MultiUse`.
 - [x] Parameterised `cConnection.GetRs`/`ExecCmd` over `mdGlobals.BindVariant`
       (VB value → `bind_*`, `?` params, 1-based); `cRecordset` split into
       `pvPrepare`/`pvMaterialize` with a `frOpenParams` bind+load path.
+- [x] `cCommand`/`cSelectCommand`/`cCursor` — reusable prepared statements
+      with typed `Set*` binds and named-parameter lookup (see section below);
+      statement helpers (`PrepareStatement`/`ReadColumnValue`/`StmtParam*`)
+      shared in `mdGlobals`.
 - [ ] `cRecordset` write surface (AddNew/Delete/UpdateBatch/ResetChanges),
       Sort/Find, Content serialization, ADO interop, JSON export.
-- [ ] `cCommand`/`cSelectCommand`/`cCursor` (named/typed params, `Set*`,
-      reusable prepared statements) on top of `BindVariant`.
+- [ ] Schema objects (`cDataBase(s)`/`cTable(s)`/`cColumn(s)`/…), `cMemDB`,
+      UDF/collation registration (`IFunction`/`IAggregateFunction`/
+      `ICollation` callbacks).
 
 ## [src/cConnection.cls](src/cConnection.cls) — connection wrapper
 
@@ -335,10 +340,42 @@ by 10000 to land in the raw bits), and **`Date` binds as ISO text**
 (`yyyy-mm-dd hh:nn:ss`, matching `GetDateString` — as a date-serial double it
 would never equality-match text-stored dates).
 
-**Left as stubs** (need classes not yet built):
-`CreateCommand`/`CreateSelectCommand`/`CreateCursor`, `DataBases`/`MemDB`,
+`CreateCommand`/`CreateSelectCommand`/`CreateCursor` build the corresponding
+prepared-statement wrappers (below).
+
+**Left as stubs** (need classes not yet built): `DataBases`/`MemDB`,
 `CopyDatabase`, the UDF/collation add/remove pair, and the
 ADO/`CreateTableFrom*` migration surface.
+
+## [src/cCommand.cls](src/cCommand.cls) / cSelectCommand / cCursor — prepared statements
+
+Three thin wrappers over one prepared `sqlite3_stmt*` each, created by the
+`cConnection` factories; all share the `mdGlobals` statement helpers
+(`PrepareStatement`, `BindInt64Value`/`BindTextValue`/`BindBlobValue`,
+`ReadColumnValue`, `StmtParamIndex`/`StmtParamName`). Each holds a **strong**
+connection reference (child → parent only, no cycle) and finalizes its
+statement in `Class_Terminate`; the `SQL` Let re-prepares.
+
+- Common `Set*` surface (1-based param index): `SetText` (UTF-8),
+  `SetTextPtr` (UTF-16 ptr → `bind_text16`), `SetTextUTF8Ptr`, `SetBlob`/
+  `SetBlobPtr`, `SetInt32`, `SetInt64` (Variant carrier → `bind_int64`),
+  `SetDouble`, `SetDate`/`SetShortDate`/`SetTime` (ISO text), `SetBoolean`
+  (0/1), `SetNull`, `SetAllParamsNull` (`clear_bindings`). All ptr/text/blob
+  binds use `SQLITE_TRANSIENT`.
+- Named params: `NameToIdx` (tries the bare name, then `:`/`@`/`$` prefixes),
+  `IdxToName` (returns the prefixed name), `ParameterCount`.
+- `cCommand.Execute` steps to `SQLITE_DONE` then **resets**, so the command
+  can be re-bound and re-run; raises with `errmsg` on failure.
+- `cSelectCommand.Execute` materialises a disconnected `cRecordset` from the
+  live statement via `cRecordset.frLoadStmt` (reads to completion **without**
+  finalizing — the command owns the statement) and then resets it; the
+  returned recordsets outlive later Executes independently.
+- `cCursor`: forward-only `Step` (True on row, False on done, raises on
+  error, increments `StepCounter`), `Reset` (rewind + zero counter), and
+  per-column `ColCount`/`ColName`/`ColType`/`ColVal` reading the current row
+  directly off the statement.
+- `Save(CommandKey)` and `cSelectCommand.ReplColumnOrTableName`/
+  `ReplTextBlock` raise `Not implemented yet`.
 
 ## [src/cRecordset.cls](src/cRecordset.cls) — disconnected recordset
 

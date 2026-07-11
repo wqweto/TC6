@@ -23,8 +23,6 @@ Attribute VB_Exposed = True
 '=========================================================================
 Option Explicit
 
-Private Declare Sub RtlMoveMemory Lib "kernel32" (ByVal Dst As LongPtr, ByVal Src As LongPtr, ByVal L As Long)
-
 Public Enum ResetEnum
     ResetAll = 0
     ResetDeletesOnly = 1
@@ -322,6 +320,15 @@ EH:
     Err.Raise Err.Number, Err.Source, Err.Description
 End Sub
 
+Friend Sub frLoadStmt(oCnn As cConnection, sSql As String, ByVal hStmt As LongPtr)
+    '--- materialise from a statement owned by the caller (cSelectCommand):
+    '--- the statement is read to completion but NOT finalized here
+    Set m_oConnection = oCnn
+    m_sSql = sSql
+    pvClear
+    pvMaterialize hStmt, False
+End Sub
+
 Friend Function frFieldCount() As Long
     frFieldCount = m_lFieldCount
 End Function
@@ -363,21 +370,11 @@ Private Sub pvLoad()
 End Sub
 
 Private Function pvPrepare(sSql As String) As LongPtr
-    Dim baSql()         As Byte
-    Dim hStmt           As LongPtr
-
     pvClear
-    If m_oConnection Is Nothing Then
-        Err.Raise vbObjectError, "cRecordset", "No active connection"
-    End If
-    baSql = ToUtf8Array(sSql & vbNullChar)
-    If vbsqlite3_prepare_v2(m_oConnection.frDbHandle, VarPtr(baSql(0)), -1, VarPtr(hStmt), 0) <> SQLITE_OK Then
-        Err.Raise vbObjectError, "cRecordset", m_oConnection.LastDBError()
-    End If
-    pvPrepare = hStmt
+    pvPrepare = PrepareStatement(m_oConnection, sSql)
 End Function
 
-Private Sub pvMaterialize(ByVal hStmt As LongPtr)
+Private Sub pvMaterialize(ByVal hStmt As LongPtr, Optional ByVal bFinalize As Boolean = True)
     Dim lCol            As Long
     Dim lRow            As Long
     Dim lCap            As Long
@@ -399,12 +396,14 @@ Private Sub pvMaterialize(ByVal hStmt As LongPtr)
                 ReDim Preserve m_vData(0 To m_lFieldCount - 1, 0 To lCap - 1)
             End If
             For lCol = 0 To m_lFieldCount - 1
-                m_vData(lCol, lRow) = pvReadColumn(hStmt, lCol)
+                m_vData(lCol, lRow) = ReadColumnValue(hStmt, lCol)
             Next
         End If
         lRow = lRow + 1
     Loop
-    Call vbsqlite3_finalize(hStmt)
+    If bFinalize Then
+        Call vbsqlite3_finalize(hStmt)
+    End If
     m_lRecordCount = lRow
     m_lCurRow = -1
     If m_lRecordCount > 0 Then
@@ -437,54 +436,6 @@ Private Sub pvReleaseFields()
         Set m_oFields = Nothing
     End If
 End Sub
-
-Private Function pvReadColumn(ByVal hStmt As LongPtr, ByVal lCol As Long) As Variant
-    '--- qualify the constants: cField.FieldType has case-identical members
-    Select Case vbsqlite3_column_type(hStmt, lCol)
-    Case mdSqliteApi.SQLITE_INTEGER
-        pvReadColumn = pvColumnInteger(hStmt, lCol)
-    Case mdSqliteApi.SQLITE_FLOAT
-        pvReadColumn = vbsqlite3_column_double(hStmt, lCol)
-    Case mdSqliteApi.SQLITE_TEXT
-        pvReadColumn = FromUtf8Ptr(vbsqlite3_column_text(hStmt, lCol))
-    Case mdSqliteApi.SQLITE_BLOB
-        pvReadColumn = pvColumnBlob(hStmt, lCol)
-    Case Else
-        pvReadColumn = Null
-    End Select
-End Function
-
-Private Function pvColumnInteger(ByVal hStmt As LongPtr, ByVal lCol As Long) As Variant
-    Dim vDec            As Variant
-
-    '--- recover the true int64: x86 returns raw bits as Currency (value*10000)
-#If Win64 Then
-    vDec = CDec(vbsqlite3_column_int64(hStmt, lCol))
-#Else
-    vDec = CDec(vbsqlite3_column_int64(hStmt, lCol)) * CDec(10000)
-#End If
-    If vDec >= -2147483648# And vDec <= 2147483647# Then
-        pvColumnInteger = CLng(vDec)
-    Else
-        pvColumnInteger = vDec
-    End If
-End Function
-
-Private Function pvColumnBlob(ByVal hStmt As LongPtr, ByVal lCol As Long) As Variant
-    Dim lLen            As Long
-    Dim lPtr            As LongPtr
-    Dim baBuf()         As Byte
-
-    lLen = vbsqlite3_column_bytes(hStmt, lCol)
-    If lLen > 0 Then
-        lPtr = vbsqlite3_column_blob(hStmt, lCol)
-        ReDim baBuf(0 To lLen - 1)
-        Call RtlMoveMemory(VarPtr(baBuf(0)), lPtr, lLen)
-        pvColumnBlob = baBuf
-    Else
-        pvColumnBlob = baBuf
-    End If
-End Function
 
 Private Function pvResolveColumns(sList As String, lNumCols As Long) As Long()
     Dim aRet()          As Long

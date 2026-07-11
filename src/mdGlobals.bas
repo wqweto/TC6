@@ -127,6 +127,93 @@ Public Function BindBlobValue(ByVal hStmt As LongPtr, ByVal lIndex As Long, baBu
     End If
 End Function
 
+Public Function PrepareStatement(oCnn As cConnection, sSql As String) As LongPtr
+    Dim baSql()         As Byte
+    Dim hStmt           As LongPtr
+
+    If oCnn Is Nothing Then
+        Err.Raise vbObjectError, "PrepareStatement", "No active connection"
+    End If
+    baSql = ToUtf8Array(sSql & vbNullChar)
+    If vbsqlite3_prepare_v2(oCnn.frDbHandle, VarPtr(baSql(0)), -1, VarPtr(hStmt), 0) <> SQLITE_OK Then
+        Err.Raise vbObjectError, "PrepareStatement", oCnn.LastDBError()
+    End If
+    PrepareStatement = hStmt
+End Function
+
+Public Function ReadColumnValue(ByVal hStmt As LongPtr, ByVal lCol As Long) As Variant
+    '--- qualify the constants: cField.FieldType has case-identical members
+    Select Case vbsqlite3_column_type(hStmt, lCol)
+    Case mdSqliteApi.SQLITE_INTEGER
+        ReadColumnValue = pvColumnInteger(hStmt, lCol)
+    Case mdSqliteApi.SQLITE_FLOAT
+        ReadColumnValue = vbsqlite3_column_double(hStmt, lCol)
+    Case mdSqliteApi.SQLITE_TEXT
+        ReadColumnValue = FromUtf8Ptr(vbsqlite3_column_text(hStmt, lCol))
+    Case mdSqliteApi.SQLITE_BLOB
+        ReadColumnValue = pvColumnBlob(hStmt, lCol)
+    Case Else
+        ReadColumnValue = Null
+    End Select
+End Function
+
+Public Function StmtParamIndex(ByVal hStmt As LongPtr, sName As String) As Long
+    '--- accept the parameter name with or without its :/@/$ prefix
+    StmtParamIndex = pvParamIndex(hStmt, sName)
+    If StmtParamIndex = 0 Then
+        StmtParamIndex = pvParamIndex(hStmt, ":" & sName)
+    End If
+    If StmtParamIndex = 0 Then
+        StmtParamIndex = pvParamIndex(hStmt, "@" & sName)
+    End If
+    If StmtParamIndex = 0 Then
+        StmtParamIndex = pvParamIndex(hStmt, "$" & sName)
+    End If
+End Function
+
+Public Function StmtParamName(ByVal hStmt As LongPtr, ByVal lIndex As Long) As String
+    StmtParamName = FromUtf8Ptr(vbsqlite3_bind_parameter_name(hStmt, lIndex))
+End Function
+
+Private Function pvParamIndex(ByVal hStmt As LongPtr, sName As String) As Long
+    Dim baName()        As Byte
+
+    baName = ToUtf8Array(sName & vbNullChar)
+    pvParamIndex = vbsqlite3_bind_parameter_index(hStmt, VarPtr(baName(0)))
+End Function
+
+Private Function pvColumnInteger(ByVal hStmt As LongPtr, ByVal lCol As Long) As Variant
+    Dim vDec            As Variant
+
+    '--- recover the true int64: x86 returns raw bits as Currency (value*10000)
+#If Win64 Then
+    vDec = CDec(vbsqlite3_column_int64(hStmt, lCol))
+#Else
+    vDec = CDec(vbsqlite3_column_int64(hStmt, lCol)) * CDec(10000)
+#End If
+    If vDec >= -2147483648# And vDec <= 2147483647# Then
+        pvColumnInteger = CLng(vDec)
+    Else
+        pvColumnInteger = vDec
+    End If
+End Function
+
+Private Function pvColumnBlob(ByVal hStmt As LongPtr, ByVal lCol As Long) As Variant
+    Dim lLen            As Long
+    Dim lPtr            As LongPtr
+    Dim baBuf()         As Byte
+
+    lLen = vbsqlite3_column_bytes(hStmt, lCol)
+    If lLen > 0 Then
+        lPtr = vbsqlite3_column_blob(hStmt, lCol)
+        ReDim baBuf(0 To lLen - 1)
+        Call CopyMemory(baBuf(0), ByVal lPtr, lLen)
+        pvColumnBlob = baBuf
+    Else
+        pvColumnBlob = baBuf
+    End If
+End Function
+
 Private Function pvArrayByteLen(baBuf() As Byte) As Long
     On Error GoTo QH
     pvArrayByteLen = UBound(baBuf) - LBound(baBuf) + 1

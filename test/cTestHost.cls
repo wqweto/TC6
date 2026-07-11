@@ -32,6 +32,7 @@ Public Function RunTests(Optional ByVal Filter As String, Optional ByVal OutputF
     '--- register per-class suites here
     RunConnectionTests
     RunRecordsetTests
+    RunCommandTests
     TestFinish
     If Len(OutputFile) = 0 Then
         OutputFile = App.Path & "\testrun.log"

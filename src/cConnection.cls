@@ -278,12 +278,27 @@ Public Sub Cancel()
 End Sub
 
 Public Function CreateCommand(SQL As String) As cCommand
+    Dim oCmd            As cCommand
+
+    Set oCmd = New cCommand
+    oCmd.frInit Me, SQL
+    Set CreateCommand = oCmd
 End Function
 
 Public Function CreateSelectCommand(SQL As String) As cSelectCommand
+    Dim oCmd            As cSelectCommand
+
+    Set oCmd = New cSelectCommand
+    oCmd.frInit Me, SQL
+    Set CreateSelectCommand = oCmd
 End Function
 
 Public Function CreateCursor(SQL As String) As cCursor
+    Dim oCursor         As cCursor
+
+    Set oCursor = New cCursor
+    oCursor.frInit Me, SQL
+    Set CreateCursor = oCursor
 End Function
 
 Public Function Execute(SQL As String) As Boolean
