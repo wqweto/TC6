@@ -575,10 +575,17 @@ Private Sub Test_ContentRC6Compat()
     Dim baContent()     As Byte
 
     If Not TestBegin("cRecordset.ContentRC6Compat") Then Exit Sub
-    On Error GoTo EH
     '--- requires the original RC6.dll registered on this machine; each case
     '--- builds identical data in both engines and asserts byte-identity +
     '--- cross-loading in both directions
+    On Error Resume Next
+    Set oRc6Rs = CreateObject("RC6.cConnection")
+    If oRc6Rs Is Nothing Then
+        TestSkipCurrent "RC6.dll not registered"
+        Exit Sub
+    End If
+    Set oRc6Rs = Nothing
+    On Error GoTo EH
     pvCompatCase "basic", "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL)", _
         "INSERT INTO t VALUES(1, 'alpha', 1.5), (2, NULL, 2.5)", "SELECT id, name, score FROM t ORDER BY id"
     pvCompatCase "int64", "CREATE TABLE t(v INTEGER)", _

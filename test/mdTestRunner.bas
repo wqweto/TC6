@@ -62,6 +62,13 @@ Public Sub TestEnd()
     End If
 End Sub
 
+Public Sub TestSkipCurrent(sReason As String)
+    '--- converts the current (already begun) test into a skipped one
+    m_lTestsRun = m_lTestsRun - 1
+    m_lTestsSkipped = m_lTestsSkipped + 1
+    pvLogLine "--- SKIP " & m_sCurrentTest & " (" & sReason & ")"
+End Sub
+
 Public Sub TestErr()
     m_lChecksFailed = m_lChecksFailed + 1
     m_bCurrentFailed = True
