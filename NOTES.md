@@ -102,6 +102,58 @@ Sourced from the outgoing (`[source]`) dispinterfaces in the IDL:
   `Reset`.
 - `cConverter`: `SchemaProgress`, `InsertProgress`, `IndexProgress`.
 
+### Event timing (probed against RC6 3.42, pinned by mdEventTests)
+
+Captured by driving identical scenarios against both engines with a
+VBScript event sink (probe scripts in the session scratchpad); TC6 matches
+RC6 trace-for-trace:
+
+- `Move`/`AddNew`/`Delete` args are **0-based row indices**; BOF = **-1**,
+  EOF = **-2**. Move-family events fire **only when the position actually
+  changes** (`MoveFirst` when already on row 0 is silent).
+- `MoveNext` at EOF / `MovePrevious` at BOF raise `vbObjectError`
+  (&H80040000) with no event; `MoveFirst`/`MoveLast` on an empty recordset
+  are silent no-ops.
+- `AbsolutePosition` is **1-based**; Get: -1 = empty rs, -2 = BOF, -3 =
+  EOF; Let: out of range (incl. 0) raises `vbObjectError`, same-row
+  assignment is silent, otherwise a single 0-based `Move`.
+- `Delete` carries the **new** position: mid-delete keeps the index (next
+  row slides in), last-row delete clamps to the new last row, deleting the
+  only row reports -1 with BOF+EOF set.
+- `AddNew` raises `AddNew(newIdx)` only — no `Move` despite the cursor
+  landing on the new row. Field sets then fire `FieldChange(row, col)`.
+- Assigning a Field its **current value is a complete no-op** — no
+  `FieldChange`, no dirty flag (RC6 compares before marking).
+- `Sort` Let rewinds to the first row and always raises a single
+  `Move(0)` (even when already on row 0, and also when clearing the sort).
+  `FindFirst`/etc raise `Move(idx)` on a hit, nothing on a miss.
+- `ReQuery` raises `QueryFinished` only; the cursor rewinds to the first
+  row without a `Move`. `Content` Let raises nothing. `ResetChanges`
+  raises `Reset`. `UpdateBatch` raises no recordset events.
+
+**Documented divergences** (deliberate, asserted as TC6 behavior in
+mdEventTests):
+
+- **Named savepoints**: RC6 3.42's `BeginTrans`/`CommitTrans`/
+  `RollbackTrans` savepoint names are dead code — probed with data checks:
+  nesting is a plain counter, a named `RollbackTrans` rolls back the whole
+  transaction (`RollbackTransComplete`), an inner named `CommitTrans` is a
+  silent counter decrement, and `CommitForSavePointComplete`/
+  `SavePointReleased`/`RollbackToSavePointComplete` never fire. TC6
+  implements the real SAVEPOINT semantics the interface declares (and
+  raises those events); unnamed transactions match RC6 exactly. NB: both
+  engines silently no-op `CommitTrans`/`RollbackTrans` with no open txn.
+- **`SortRefresh`**: RC6's cursor drifts erratically (+1 row on a clean
+  recordset, no re-sort at all with pending dirty edits) — evidently
+  buggy; TC6 re-applies the sort with the cursor pinned to its record,
+  raising `Move` only if the index changed.
+- **`ResetChanges` under an active sort**: RC6 emits a Move storm from its
+  row-chain rebuild and re-sorts on original values; TC6 re-applies the
+  sort (record-pinned, at most one `Move`) and always raises `Reset`.
+- **`Sort = ""`**: RC6 restores the natural row order (nondestructive row
+  chain); TC6's in-place permute keeps the current order (still rewinds
+  with `Move(0)`).
+
 ## IDL → VB6 type mapping used
 
 | IDL | VB6 |

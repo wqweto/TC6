@@ -151,22 +151,30 @@ Public Property Get EOF() As Boolean
 End Property
 
 Public Property Get AbsolutePosition() As Long
-    AbsolutePosition = m_lCurRow
+    '--- RC6 semantics: 1-based; -1 = empty recordset, -2 = BOF, -3 = EOF
+    If m_lRecordCount = 0 Then
+        AbsolutePosition = -1
+    ElseIf m_lCurRow < 0 Then
+        AbsolutePosition = -2
+    ElseIf m_lCurRow >= m_lRecordCount Then
+        AbsolutePosition = -3
+    Else
+        AbsolutePosition = m_lCurRow + 1
+    End If
 End Property
 
 Public Property Let AbsolutePosition(ByVal RHS As Long)
-    If RHS < 0 Then
-        m_lCurRow = -1
-    ElseIf RHS >= m_lRecordCount Then
-        m_lCurRow = m_lRecordCount
-    Else
-        m_lCurRow = RHS
+    If RHS < 1 Or RHS > m_lRecordCount Then
+        Err.Raise vbObjectError, "cRecordset", "Invalid position"
     End If
-    RaiseEvent Move(m_lCurRow)
+    If m_lCurRow <> RHS - 1 Then
+        m_lCurRow = RHS - 1
+        RaiseEvent Move(m_lCurRow)
+    End If
 End Property
 
 Public Property Get Bookmark() As Long
-    Bookmark = m_lCurRow
+    Bookmark = AbsolutePosition
 End Property
 
 Public Property Let Bookmark(ByVal RHS As Long)
@@ -179,7 +187,13 @@ End Property
 
 Public Property Let Sort(ByVal RHS As String)
     m_sSort = RHS
-    pvApplySort
+    pvApplySort False
+    '--- RC6 semantics: setting Sort rewinds to the first row and always
+    '--- raises Move(0)
+    If m_lRecordCount > 0 Then
+        m_lCurRow = 0
+        RaiseEvent Move(0)
+    End If
 End Property
 
 Public Property Get Fields() As cFields
@@ -291,7 +305,13 @@ Public Sub Delete()
         m_cDeleted.Add aEntry
     End If
     pvRemoveRow m_lCurRow
-    RaiseEvent Delete(m_lCurRow)
+    '--- RC6 semantics: the cursor stays put (next row slides in) or clamps
+    '--- to the new last row; the event carries the new position (-1 when
+    '--- the recordset just became empty)
+    If m_lCurRow > m_lRecordCount - 1 Then
+        m_lCurRow = m_lRecordCount - 1
+    End If
+    RaiseEvent Delete(pvEventPos())
 End Sub
 
 Public Sub UpdateBatch()
@@ -324,31 +344,43 @@ EH:
 End Sub
 
 Public Sub MoveFirst()
-    If m_lRecordCount > 0 Then
-        m_lCurRow = 0
+    '--- RC6 semantics: silent no-op on an empty recordset; Move raised only
+    '--- when the position actually changes
+    If m_lRecordCount = 0 Then
+        Exit Sub
     End If
-    RaiseEvent Move(m_lCurRow)
+    If m_lCurRow <> 0 Then
+        m_lCurRow = 0
+        RaiseEvent Move(0)
+    End If
 End Sub
 
 Public Sub MoveLast()
-    If m_lRecordCount > 0 Then
-        m_lCurRow = m_lRecordCount - 1
+    If m_lRecordCount = 0 Then
+        Exit Sub
     End If
-    RaiseEvent Move(m_lCurRow)
+    If m_lCurRow <> m_lRecordCount - 1 Then
+        m_lCurRow = m_lRecordCount - 1
+        RaiseEvent Move(m_lCurRow)
+    End If
 End Sub
 
 Public Sub MoveNext()
-    If m_lCurRow < m_lRecordCount Then
-        m_lCurRow = m_lCurRow + 1
+    '--- RC6 semantics: moving past the last row lands on EOF (Move(-2));
+    '--- another MoveNext raises an error
+    If m_lRecordCount = 0 Or m_lCurRow >= m_lRecordCount Then
+        Err.Raise vbObjectError, "cRecordset", "Already at EOF"
     End If
-    RaiseEvent Move(m_lCurRow)
+    m_lCurRow = m_lCurRow + 1
+    RaiseEvent Move(pvEventPos())
 End Sub
 
 Public Sub MovePrevious()
-    If m_lCurRow >= 0 Then
-        m_lCurRow = m_lCurRow - 1
+    If m_lRecordCount = 0 Or m_lCurRow < 0 Then
+        Err.Raise vbObjectError, "cRecordset", "Already at BOF"
     End If
-    RaiseEvent Move(m_lCurRow)
+    m_lCurRow = m_lCurRow - 1
+    RaiseEvent Move(pvEventPos())
 End Sub
 
 Public Sub SortRefresh()
@@ -476,6 +508,11 @@ Public Sub ResetChanges(Optional ByVal WhichChanges As ResetEnum = ResetAll)
             End If
         Next
     End If
+    '--- reverting sort-key edits may invalidate the current order (RC6
+    '--- re-sorts too, with its own Move storm)
+    If Len(Trim$(m_sSort)) > 0 Then
+        pvApplySort
+    End If
     RaiseEvent Reset
 End Sub
 
@@ -579,6 +616,11 @@ Friend Sub frSetCellValueAt(ByVal lRow As Long, ByVal lCol As Long, vValue As Va
         Err.Raise 9
     End If
     pvCheckWritable lCol
+    '--- RC6 semantics: assigning the current value is a complete no-op (no
+    '--- dirty flag, no FieldChange)
+    If pvCellValueEquals(m_aData(lCol, lRow), vValue) Then
+        Exit Sub
+    End If
     pvEnsureWriteState
     '--- first change to an existing row's cell captures the original value
     If m_aRowState(lRow) <> ROW_NEW Then
@@ -1148,7 +1190,7 @@ Private Sub pvClearWriteState()
     End If
 End Sub
 
-Private Sub pvApplySort()
+Private Sub pvApplySort(Optional ByVal bRaiseMove As Boolean = True)
     Dim aCols()         As Long
     Dim aDesc()         As Boolean
     Dim lKeys           As Long
@@ -1167,7 +1209,7 @@ Private Sub pvApplySort()
         aIdx(lRow) = lRow
     Next
     pvQuickSortRows aIdx, 0, m_lRecordCount - 1, aCols, aDesc, lKeys
-    pvPermuteRows aIdx
+    pvPermuteRows aIdx, bRaiseMove
 End Sub
 
 Private Sub pvParseSort(aCols() As Long, aDesc() As Boolean, lKeys As Long)
@@ -1259,7 +1301,7 @@ Private Function pvCompareRows(ByVal lRow1 As Long, ByVal lRow2 As Long, aCols()
     pvCompareRows = Sgn(lRow1 - lRow2)
 End Function
 
-Private Sub pvPermuteRows(aIdx() As Long)
+Private Sub pvPermuteRows(aIdx() As Long, Optional ByVal bRaiseMove As Boolean = True)
     Dim aDataNew()      As Variant
     Dim aOriginalNew()  As Variant
     Dim aDirtyNew()     As Boolean
@@ -1298,7 +1340,9 @@ Private Sub pvPermuteRows(aIdx() As Long)
     If m_lCurRow >= 0 And m_lCurRow < m_lRecordCount Then
         If lNewCur <> m_lCurRow Then
             m_lCurRow = lNewCur
-            RaiseEvent Move(m_lCurRow)
+            If bRaiseMove Then
+                RaiseEvent Move(m_lCurRow)
+            End If
         End If
     End If
 End Sub
@@ -1316,7 +1360,10 @@ Private Function pvFindMove(ByVal lFrom As Long, ByVal lStep As Long, sCriterion
     Do While lRow >= 0 And lRow < m_lRecordCount
         If pvMatchValue(m_aData(lCol, lRow), lOp, vValue, bDistinctNull) Then
             '--- found: move there; not found leaves the position unchanged
-            AbsolutePosition = lRow
+            If m_lCurRow <> lRow Then
+                m_lCurRow = lRow
+                RaiseEvent Move(lRow)
+            End If
             pvFindMove = True
             Exit Function
         End If
@@ -2050,6 +2097,47 @@ End Function
 
 Private Function pvIsNullCell(vCell As Variant) As Boolean
     pvIsNullCell = IsNull(vCell) Or IsEmpty(vCell)
+End Function
+
+Private Function pvEventPos() As Long
+    '--- RC6 event position codes: row index, -1 = BOF/empty, -2 = EOF
+    If m_lRecordCount = 0 Then
+        pvEventPos = -1
+    ElseIf m_lCurRow < 0 Then
+        pvEventPos = -1
+    ElseIf m_lCurRow >= m_lRecordCount Then
+        pvEventPos = -2
+    Else
+        pvEventPos = m_lCurRow
+    End If
+End Function
+
+Private Function pvCellValueEquals(vOld As Variant, vNew As Variant) As Boolean
+    Dim baOld()         As Byte
+    Dim baNew()         As Byte
+    Dim lIdx            As Long
+
+    On Error GoTo QH
+    If pvIsNullCell(vOld) And pvIsNullCell(vNew) Then
+        pvCellValueEquals = True
+    ElseIf pvIsNullCell(vOld) Or pvIsNullCell(vNew) Then
+        '--- not equal
+    ElseIf IsArray(vOld) And IsArray(vNew) Then
+        baOld = vOld
+        baNew = vNew
+        If pvBytesLen(baOld) <> pvBytesLen(baNew) Then
+            Exit Function
+        End If
+        For lIdx = 0 To pvBytesLen(baOld) - 1
+            If baOld(lIdx) <> baNew(lIdx) Then
+                Exit Function
+            End If
+        Next
+        pvCellValueEquals = True
+    ElseIf Not IsArray(vOld) And Not IsArray(vNew) Then
+        pvCellValueEquals = (vOld = vNew)
+    End If
+QH:
 End Function
 
 Private Function pvCellDbl(vCell As Variant) As Double

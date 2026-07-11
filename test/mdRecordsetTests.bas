@@ -74,7 +74,7 @@ Private Sub Test_Navigation()
     Set oCnn = pvSeededDb()
     Set oRs = oCnn.OpenRecordset("SELECT id FROM t ORDER BY id")
     oRs.MoveFirst
-    AssertEqLng oRs.AbsolutePosition, 0, "AbsolutePosition after MoveFirst"
+    AssertEqLng oRs.AbsolutePosition, 1, "AbsolutePosition after MoveFirst (1-based)"
     AssertEqLng CLng(oRs.Fields(0).Value), 1, "id on first row"
     oRs.MoveNext
     AssertEqLng CLng(oRs.Fields(0).Value), 2, "id after MoveNext"
@@ -85,8 +85,8 @@ Private Sub Test_Navigation()
     AssertTrue oRs.EOF, "EOF after moving past last row"
     oRs.MovePrevious
     AssertEqLng CLng(oRs.Fields(0).Value), 3, "back on last row after MovePrevious"
-    oRs.AbsolutePosition = 1
-    AssertEqLng CLng(oRs.Fields(0).Value), 2, "row after AbsolutePosition = 1"
+    oRs.AbsolutePosition = 2
+    AssertEqLng CLng(oRs.Fields(0).Value), 2, "row after AbsolutePosition = 2 (1-based)"
     TestEnd
     Exit Sub
 EH:
@@ -296,7 +296,7 @@ Private Sub Test_AddNewInsert()
     Set oCnn = pvSeededDb()
     Set oRs = oCnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
     oRs.AddNew
-    AssertEqLng oRs.AbsolutePosition, 3, "positioned on the new row"
+    AssertEqLng oRs.AbsolutePosition, 4, "positioned on the new row (1-based)"
     AssertEqLng oRs.RecordCount, 4, "RecordCount includes pending insert"
     oRs.Fields("name").Value = "delta"
     oRs.Fields("score").Value = 4.5
@@ -379,9 +379,11 @@ Private Sub Test_Sort()
     oRs.Sort = "name DESC"
     AssertEqStr CStr(oRs.ValueMatrix(0, 1)), "gamma", "first row after DESC sort"
     AssertEqStr CStr(oRs.ValueMatrix(2, 1)), "alpha", "last row after DESC sort"
-    AssertEqLng oRs.AbsolutePosition, 2, "cursor followed its row"
-    AssertEqStr CStr(oRs.Fields("name").Value), "alpha", "still on alpha after sort"
+    AssertEqLng oRs.AbsolutePosition, 1, "cursor rewound to first row (RC6 semantics)"
+    AssertEqStr CStr(oRs.Fields("name").Value), "gamma", "on gamma after sort rewind"
     '--- pending changes travel with their rows through a sort
+    oRs.MoveLast
+    AssertEqStr CStr(oRs.Fields("name").Value), "alpha", "back on alpha via MoveLast"
     oRs.Fields("score").Value = 9.9
     oRs.Sort = "score"
     oRs.UpdateBatch
