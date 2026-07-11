@@ -23,6 +23,8 @@ Public Sub RunRecordsetTests()
     Test_ResetChanges
     Test_Sort
     Test_Find
+    Test_FieldMetadata
+    Test_AutoCreateUniqueID64
 End Sub
 
 Private Function pvSeededDb() As cConnection
@@ -425,6 +427,61 @@ Private Sub Test_Find()
     AssertTrue oRs.FindFirst("name = NULL", False), "= NULL matches with DistinctNullValues=False"
     AssertTrue oRs.FindFirst("name <> 'alpha'", False), "<> treats null as a regular value when non-distinct"
     AssertEqLng CLng(oRs.Fields("id").Value), 2, "first non-alpha row"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_FieldMetadata()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+
+    If Not TestBegin("cRecordset.FieldMetadata") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    oCnn.Execute "CREATE TABLE meta1(id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR(50) NOT NULL DEFAULT 'x' COLLATE NOCASE, email TEXT UNIQUE, score REAL)"
+    Set oRs = oCnn.OpenRecordset("SELECT id, name AS alias_name, email, score, score * 2 AS expr FROM meta1")
+    AssertEqStr oRs.Fields("alias_name").OriginalColumnName, "name", "OriginalColumnName behind alias"
+    AssertEqStr oRs.Fields("alias_name").OriginalTableName, "meta1", "OriginalTableName"
+    AssertEqStr oRs.Fields("alias_name").OriginalDataBaseName, "main", "OriginalDataBaseName"
+    AssertEqStr oRs.Fields("alias_name").OriginalDataType, "VARCHAR(50)", "OriginalDataType"
+    AssertEqLng oRs.Fields("alias_name").DefinedSize, 50, "DefinedSize from declared type"
+    AssertEqStr oRs.Fields("alias_name").DefaultValue, "'x'", "DefaultValue verbatim"
+    AssertTrue oRs.Fields("alias_name").NotNullConstraint, "NotNullConstraint"
+    AssertEqStr oRs.Fields("alias_name").CollationSequence, "NOCASE", "CollationSequence"
+    AssertTrue oRs.Fields("id").PrimaryKey, "PrimaryKey"
+    AssertTrue oRs.Fields("id").AutoIncrement, "AutoIncrement"
+    AssertTrue oRs.Fields("email").UniqueConstraint, "UniqueConstraint via implicit index"
+    AssertEqStr oRs.Fields("expr").OriginalColumnName, "", "expression column has no origin"
+    AssertTrue Not oRs.Fields("expr").PrimaryKey, "expression column is not PK"
+    Set oRs = oCnn.OpenRecordset("SELECT id FROM meta1", ReadOnly:=True)
+    AssertTrue oRs.Fields("id").PrimaryKey, "metadata works on a ReadOnly open"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_AutoCreateUniqueID64()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+
+    If Not TestBegin("cRecordset.AutoCreateUniqueID64") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name FROM t")
+    AssertTrue Not oRs.AutoCreateUniqueID64, "off by default (matches RC6)"
+    oRs.AutoCreateUniqueID64 = True
+    oRs.AddNew
+    AssertTrue Not IsNull(oRs.Fields("id").Value), "INTEGER PK auto-filled on AddNew"
+    AssertTrue CDec(oRs.Fields("id").Value) > CDec("4000000000000000000"), "id has time-based magnitude"
+    oRs.Fields("name").Value = "auto"
+    oRs.UpdateBatch
+    Set oRs = oCnn.GetRs("SELECT id FROM t WHERE name = ?", "auto")
+    AssertEqLng oRs.RecordCount, 1, "auto-id row persisted"
+    AssertTrue CDec(oRs.Fields("id").Value) > CDec("4000000000000000000"), "persisted id keeps full precision"
     TestEnd
     Exit Sub
 EH:

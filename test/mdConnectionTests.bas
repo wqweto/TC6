@@ -17,6 +17,9 @@ Public Sub RunConnectionTests()
     Test_ExecCmd
     Test_ExecCmdBlob
     Test_BindInt64AndDate
+    Test_UniqueID64
+    Test_CopyDatabase
+    Test_CreateTable
 End Sub
 
 Private Sub Test_Version()
@@ -250,6 +253,81 @@ Private Sub Test_BindInt64AndDate()
     '--- bound date must equality-match a GetDateString literal
     Set oRs = oCnn.GetRs("SELECT COUNT(*) AS n FROM t WHERE d = ?", dSample)
     AssertEqLng CLng(oRs.Fields("n").Value), 1, "WHERE d = ? matches the text-stored date"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_UniqueID64()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+    Dim vId1            As Variant
+    Dim vId2            As Variant
+    Dim dStamp          As Date
+    Dim dblFrac         As Double
+
+    If Not TestBegin("cConnection.UniqueID64") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = New cConnection
+    vId1 = oCnn.UniqueID64
+    vId2 = oCnn.UniqueID64
+    AssertEqLng VarType(vId1), 20, "returns a VT_I8 variant (matches RC6)"
+    AssertTrue CDec(vId2) > CDec(vId1), "strictly increasing"
+    '--- RC6 encoding: value / 10^14 = local VB date serial
+    AssertTrue Abs(CDbl(CDec(vId1) / CDec("100000000000000")) - CDbl(Now)) < 0.01, "value encodes the current date serial"
+    oCnn.CreateNewDB ":memory:"
+    Set oRs = oCnn.OpenRecordset("SELECT 1")
+    dblFrac = -1
+    dStamp = oRs.UniqueID64ToVBDate(vId1, dblFrac)
+    AssertTrue Abs(DateDiff("s", dStamp, Now)) < 120, "UniqueID64ToVBDate returns the encoded time"
+    AssertTrue dblFrac >= 0 And dblFrac < 1, "ReturnFracSeconds is the sub-second remainder"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_CopyDatabase()
+    Dim oCnn            As cConnection
+    Dim oDst            As cConnection
+
+    If Not TestBegin("cConnection.CopyDatabase") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    oCnn.Execute "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)"
+    oCnn.Execute "INSERT INTO t(v) VALUES('a'), ('b'), ('c')"
+    Set oDst = oCnn.CopyDatabase()
+    AssertEqLng CLng(oDst.GetRs("SELECT COUNT(*) AS n FROM t").Fields("n").Value), 3, "copy holds all rows"
+    AssertEqStr CStr(oDst.GetRs("SELECT v FROM t WHERE id = ?", 2).Fields("v").Value), "b", "copied values intact"
+    '--- the copy is fully independent of the source
+    oCnn.Execute "INSERT INTO t(v) VALUES('d')"
+    AssertEqLng CLng(oDst.GetRs("SELECT COUNT(*) AS n FROM t").Fields("n").Value), 3, "copy unaffected by source changes"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_CreateTable()
+    Dim oCnn            As cConnection
+    Dim oFds            As Collection
+    Dim oRs             As cRecordset
+
+    If Not TestBegin("cConnection.CreateTable") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    Set oFds = oCnn.NewFieldDefs()
+    oFds.Add "F1 TEXT"
+    oFds.Add "F2 INTEGER"
+    oFds.Add "F3 DOUBLE"
+    oCnn.CreateTable "TT", oFds
+    Set oRs = oCnn.OpenRecordset("SELECT * FROM TT")
+    AssertEqLng CLng(oRs.Fields.Count), 3, "created table has all columns"
+    AssertEqStr oRs.Fields(0).Name, "F1", "first column name"
+    AssertEqStr oRs.Fields(1).OriginalDataType, "INTEGER", "declared type applied"
     TestEnd
     Exit Sub
 EH:

@@ -310,33 +310,50 @@ type. `cTestHost` is `MultiUse`.
       below).
 - [x] `cRecordset` `Sort`/`SortRefresh` + `Find*` — in-memory multi-key
       sort and ADO-style criterion scan (see the cRecordset section).
-- [ ] Remaining stubs, in planned order:
-      1. `cField` metadata getters (`DefaultValue`/`Original*`/
-         `CollationSequence`/`NotNullConstraint`/`PrimaryKey`/
-         `AutoIncrement`/`UniqueConstraint`/`DefinedSize`) — the analysis
-         already has origin db/table/column; rest via `column_decltype` +
-         `table_column_metadata`.
-      2. `cMemDB` (delegation to an internal `:memory:` connection +
-         aggregate helpers) + `cConnection.MemDB` and `CreateTable`/
-         `NewFieldDefs` (FieldDefs → DDL).
-      3. `cConnection.CopyDatabase` (`sqlite3_backup_*`).
-      4. `UniqueID64` machinery (`cConnection.UniqueID64`,
-         `cRecordset.UniqueID64`/`UniqueID64ToVBDate`/
-         `AutoCreateUniqueID64`) — probe RC6.dll first to match format.
-      5. UDF/collation subsystem: `cUDFMethods` + `cConnection.Add/
-         RemoveUserDefined*` over `create_function_v2`/`create_collation`
-         AddressOf trampolines (`IFunction`/`IAggregateFunction`/
-         `ICollation` stay empty by design — users Implements them).
-      6. Content serialization (`Content`/`ContentChangesOnly`/
-         `CreateTableFromRsContent`/`GetADORsFromContent`), `ToJSONUTF8`,
-         `GetRowsWithHeaders` — needs a blob-format decision
-         (RC6-compatible vs TC6-own).
-      7. Tail / possibly out of scope for v1: DDL-parsing members
-         (`cColumn.OriginalConstraint`/`ConstraintName`/`CheckExpression`/
-         `PrimarySortOrder`, `cTable.Constraint`), `cCommand`/
-         `cSelectCommand.Save` + `Repl*`, ADO interop (`cConverter`,
-         `CreateTableFromADORs`, `DataSource`), `cDBAccess` (RC6 thread
-         marshalling).
+- [x] `cField` metadata getters — origin db/table/column + decltype are now
+      captured per column on **every** open (`pvCaptureColumnMeta`, also
+      ReadOnly); the pragma-backed verdicts reuse the `cColumns` enrichment
+      lazily, cached per origin table (`frColSchema`). `DefinedSize` parses
+      the `(N)` of the declared type.
+- [x] `cMemDB` — own `:memory:` connection on create (replaceable via
+      `Set Cnn`), full delegation (`GetRs`/`Exec`/`ExecCmd`/commands/
+      cursor/transactions), `GetTable` (WHERE/ORDER BY), `GetSingleVal`
+      (Null on empty), `GetSum`/`GetAvg`/`GetMin`/`GetMax`/`GetCount`, and
+      `CreateTableFromRs` for `cRecordset` sources (columns from field
+      metadata incl. declared types and optional PKs; ADO/byte-content
+      sources still raise). `cConnection.MemDB` returns a cached instance.
+- [x] `cConnection.CreateTable`/`NewFieldDefs` — each FieldDefs item is a
+      verbatim column definition (RC6's `NewFieldDefs` returns the
+      intrinsic `Collection` — verified; `CreateTable` is not callable
+      late-bound from VBScript, so the item syntax follows RC6's
+      documented "name type" usage).
+- [x] `cConnection.CopyDatabase` — `sqlite3_backup_init/step(-1)/finish`
+      into a fresh connection, optional `VACUUM`; the copy is independent.
+- [x] `UniqueID64` — format verified against RC6.dll 3.42.0: **local-time
+      VB date serial × 10^14** (sub-ms bits from the high-res clock),
+      returned as a **VT_I8 variant** (built by `mdGlobals.Int64Variant`
+      via the Currency carrier; `BindVariant` accepts VT_I8 too).
+      `mdGlobals.CreateUniqueID64` uses `GetSystemTimePreciseAsFileTime` +
+      a strictly-increasing guard; `cRecordset.UniqueID64ToVBDate` is the
+      exact inverse (+ sub-second remainder out-param). With
+      `AutoCreateUniqueID64 = True` (default False, matches RC6) `AddNew`
+      fills the INTEGER PK with a fresh id. NB (probed): RC6's `AddNew`
+      leaves other new-row cells **Empty** while TC6 sets `Null` — minor
+      divergence, revisit with the Content work.
+- [ ] UDF/collation subsystem: `cUDFMethods` + `cConnection.Add/
+      RemoveUserDefined*` over `create_function_v2`/`create_collation`
+      AddressOf trampolines (`IFunction`/`IAggregateFunction`/`ICollation`
+      stay empty by design — users Implements them).
+- [ ] Content serialization (`Content`/`ContentChangesOnly`/
+      `CreateTableFromRsContent`/`GetADORsFromContent`), `ToJSONUTF8`,
+      `GetRowsWithHeaders` — needs a blob-format decision (RC6-compatible
+      vs TC6-own).
+- [ ] Tail / possibly out of scope for v1: DDL-parsing members
+      (`cColumn.OriginalConstraint`/`ConstraintName`/`CheckExpression`/
+      `PrimarySortOrder`, `cTable.Constraint`), `cCommand`/
+      `cSelectCommand.Save` + `Repl*`, ADO interop (`cConverter`,
+      `CreateTableFromADORs`, `DataSource`), `cDBAccess` (RC6 thread
+      marshalling).
 
 ## [src/cConnection.cls](src/cConnection.cls) — connection wrapper
 

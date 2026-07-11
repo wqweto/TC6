@@ -77,11 +77,16 @@ Private m_lRecordCount              As Long
 Private m_lCurRow                   As Long
 Private m_aFieldName()              As String
 Private m_vData()                   As Variant
+'--- per-column origin metadata (captured on every open, see cField)
+Private m_aOrigColumn()             As String
+Private m_aOrigTable()              As String
+Private m_aOrigDb()                 As String
+Private m_aDeclType()               As String
+Private m_cColMeta                  As VBA.Collection
 '--- updatability analysis (per open)
 Private m_bUpdatable                As Boolean
 Private m_sOrigDb                   As String
 Private m_sOrigTable                As String
-Private m_aOrigColumn()             As String
 Private m_alPkCols()                As Long
 Private m_lPkCount                  As Long
 Private m_lAutoPkCol                As Long
@@ -128,6 +133,7 @@ Public Property Get Updatable() As Boolean
 End Property
 
 Public Property Get UniqueID64() As Variant
+    UniqueID64 = CreateUniqueID64()
 End Property
 
 Public Property Get BOF() As Boolean
@@ -210,6 +216,14 @@ Public Property Let Content(RHS() As Byte)
 End Property
 
 Public Function UniqueID64ToVBDate(UniqueID64 As Variant, Optional ReturnFracSeconds As Double) As Date
+    Dim decSerial       As Variant
+    Dim decSeconds      As Variant
+
+    '--- inverse of CreateUniqueID64: value / 10^14 is the VB date serial
+    decSerial = CDec(UniqueID64) / CDec("100000000000000")
+    UniqueID64ToVBDate = CDate(CDbl(decSerial))
+    decSeconds = decSerial * 86400
+    ReturnFracSeconds = CDbl(decSeconds - Int(decSeconds))
 End Function
 
 Public Sub AddNew()
@@ -222,6 +236,10 @@ Public Sub AddNew()
         m_vData(lCol, m_lRecordCount) = Null
         m_abDirty(lCol, m_lRecordCount) = False
     Next
+    '--- RC6 semantics: fill the INTEGER PK with a time-based unique id
+    If m_bAutoCreateUniqueID64 And m_lAutoPkCol >= 0 Then
+        m_vData(m_lAutoPkCol, m_lRecordCount) = CreateUniqueID64()
+    End If
     m_alRowState(m_lRecordCount) = ROW_NEW
     m_lRecordCount = m_lRecordCount + 1
     m_lCurRow = m_lRecordCount - 1
@@ -584,6 +602,59 @@ Friend Function frColumnUpdatable(ByVal lCol As Long) As Boolean
     End If
 End Function
 
+Friend Function frColOriginName(ByVal lCol As Long) As String
+    If lCol >= 0 And lCol < m_lFieldCount Then
+        frColOriginName = m_aOrigColumn(lCol)
+    End If
+End Function
+
+Friend Function frColOriginTable(ByVal lCol As Long) As String
+    If lCol >= 0 And lCol < m_lFieldCount Then
+        frColOriginTable = m_aOrigTable(lCol)
+    End If
+End Function
+
+Friend Function frColOriginDb(ByVal lCol As Long) As String
+    If lCol >= 0 And lCol < m_lFieldCount Then
+        frColOriginDb = m_aOrigDb(lCol)
+    End If
+End Function
+
+Friend Function frColDeclType(ByVal lCol As Long) As String
+    If lCol >= 0 And lCol < m_lFieldCount Then
+        frColDeclType = m_aDeclType(lCol)
+    End If
+End Function
+
+Friend Function frColSchema(ByVal lCol As Long) As cColumn
+    Dim sKey            As String
+    Dim oColumns        As cColumns
+
+    '--- lazily build (and cache per origin table) the cColumns enrichment
+    '--- so cField can expose the pragma-backed schema verdicts
+    If lCol < 0 Or lCol >= m_lFieldCount Then
+        Exit Function
+    End If
+    If Len(m_aOrigColumn(lCol)) = 0 Or Len(m_aOrigTable(lCol)) = 0 Then
+        Exit Function
+    End If
+    If m_cColMeta Is Nothing Then
+        Set m_cColMeta = New VBA.Collection
+    End If
+    sKey = m_aOrigDb(lCol) & "." & m_aOrigTable(lCol)
+    On Error Resume Next
+    Set oColumns = m_cColMeta.Item(sKey)
+    On Error GoTo 0
+    If oColumns Is Nothing Then
+        Set oColumns = New cColumns
+        oColumns.frInit m_oConnection, m_aOrigDb(lCol), m_aOrigTable(lCol)
+        m_cColMeta.Add oColumns, sKey
+    End If
+    On Error Resume Next
+    Set frColSchema = oColumns.Item(m_aOrigColumn(lCol))
+    On Error GoTo 0
+End Function
+
 Private Sub pvLoad()
     pvMaterialize pvPrepare(m_sSql)
 End Sub
@@ -607,7 +678,8 @@ Private Sub pvMaterialize(ByVal hStmt As LongPtr, Optional ByVal bFinalize As Bo
         Next
         ReDim m_vData(0 To m_lFieldCount - 1, 0 To lCap - 1)
     End If
-    pvAnalyzeUpdatable hStmt
+    pvCaptureColumnMeta hStmt
+    pvAnalyzeUpdatable
     lRow = 0
     Do While vbsqlite3_step(hStmt) = SQLITE_ROW
         If m_lFieldCount > 0 Then
@@ -639,13 +711,17 @@ Private Sub pvClear()
     m_lCurRow = -1
     Erase m_vData
     Erase m_aFieldName
-    '--- updatability + pending-changes state
+    '--- column metadata + updatability + pending-changes state
     m_bUpdatable = False
     m_sOrigDb = vbNullString
     m_sOrigTable = vbNullString
     m_lPkCount = 0
     m_lAutoPkCol = -1
     Erase m_aOrigColumn
+    Erase m_aOrigTable
+    Erase m_aOrigDb
+    Erase m_aDeclType
+    Set m_cColMeta = Nothing
     Erase m_alPkCols
     m_bWriteState = False
     Erase m_vOrig
@@ -704,9 +780,26 @@ Private Function pvResolveColumns(sList As String, lNumCols As Long) As Long()
     pvResolveColumns = aRet
 End Function
 
-Private Sub pvAnalyzeUpdatable(ByVal hStmt As LongPtr)
+Private Sub pvCaptureColumnMeta(ByVal hStmt As LongPtr)
     Dim lCol            As Long
-    Dim sTable          As String
+
+    If m_lFieldCount = 0 Then
+        Exit Sub
+    End If
+    ReDim m_aOrigColumn(0 To m_lFieldCount - 1)
+    ReDim m_aOrigTable(0 To m_lFieldCount - 1)
+    ReDim m_aOrigDb(0 To m_lFieldCount - 1)
+    ReDim m_aDeclType(0 To m_lFieldCount - 1)
+    For lCol = 0 To m_lFieldCount - 1
+        m_aOrigColumn(lCol) = FromUtf8Ptr(vbsqlite3_column_origin_name(hStmt, lCol))
+        m_aOrigTable(lCol) = FromUtf8Ptr(vbsqlite3_column_table_name(hStmt, lCol))
+        m_aOrigDb(lCol) = FromUtf8Ptr(vbsqlite3_column_database_name(hStmt, lCol))
+        m_aDeclType(lCol) = FromUtf8Ptr(vbsqlite3_column_decltype(hStmt, lCol))
+    Next
+End Sub
+
+Private Sub pvAnalyzeUpdatable()
+    Dim lCol            As Long
     Dim asPkName()      As String
     Dim sPkType         As String
     Dim lPkIdx          As Long
@@ -717,15 +810,12 @@ Private Sub pvAnalyzeUpdatable(ByVal hStmt As LongPtr)
     End If
     '--- updatable iff every table-backed column originates in one table and
     '--- all of that table's PK columns are present in the result set
-    ReDim m_aOrigColumn(0 To m_lFieldCount - 1)
     For lCol = 0 To m_lFieldCount - 1
-        m_aOrigColumn(lCol) = FromUtf8Ptr(vbsqlite3_column_origin_name(hStmt, lCol))
-        sTable = FromUtf8Ptr(vbsqlite3_column_table_name(hStmt, lCol))
-        If Len(sTable) > 0 Then
+        If Len(m_aOrigTable(lCol)) > 0 Then
             If Len(m_sOrigTable) = 0 Then
-                m_sOrigTable = sTable
-                m_sOrigDb = FromUtf8Ptr(vbsqlite3_column_database_name(hStmt, lCol))
-            ElseIf StrComp(m_sOrigTable, sTable, vbTextCompare) <> 0 Then
+                m_sOrigTable = m_aOrigTable(lCol)
+                m_sOrigDb = m_aOrigDb(lCol)
+            ElseIf StrComp(m_sOrigTable, m_aOrigTable(lCol), vbTextCompare) <> 0 Then
                 Exit Sub
             End If
         End If

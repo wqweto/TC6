@@ -34,6 +34,7 @@ Public Function RunTests(Optional ByVal Filter As String, Optional ByVal OutputF
     RunRecordsetTests
     RunCommandTests
     RunSchemaTests
+    RunMemDBTests
     TestFinish
     If Len(OutputFile) = 0 Then
         OutputFile = App.Path & "\testrun.log"

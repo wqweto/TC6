@@ -49,6 +49,12 @@ Public Property Get Name() As String
 End Property
 
 Public Property Get DefaultValue() As String
+    Dim oColumn         As cColumn
+
+    Set oColumn = pvRs.frColSchema(m_lCol)
+    If Not oColumn Is Nothing Then
+        DefaultValue = oColumn.DefaultValue
+    End If
 End Property
 
 Public Property Get Updateable() As Boolean
@@ -56,30 +62,64 @@ Public Property Get Updateable() As Boolean
 End Property
 
 Public Property Get OriginalColumnName() As String
+    OriginalColumnName = pvRs.frColOriginName(m_lCol)
 End Property
 
 Public Property Get OriginalTableName() As String
+    OriginalTableName = pvRs.frColOriginTable(m_lCol)
 End Property
 
 Public Property Get OriginalDataBaseName() As String
+    OriginalDataBaseName = pvRs.frColOriginDb(m_lCol)
 End Property
 
 Public Property Get OriginalDataType() As String
+    OriginalDataType = pvRs.frColDeclType(m_lCol)
 End Property
 
 Public Property Get CollationSequence() As String
+    Dim oColumn         As cColumn
+
+    Set oColumn = pvRs.frColSchema(m_lCol)
+    If Not oColumn Is Nothing Then
+        CollationSequence = oColumn.Collate
+    End If
 End Property
 
 Public Property Get NotNullConstraint() As Boolean
+    Dim oColumn         As cColumn
+
+    Set oColumn = pvRs.frColSchema(m_lCol)
+    If Not oColumn Is Nothing Then
+        NotNullConstraint = oColumn.NotNullConstraint
+    End If
 End Property
 
 Public Property Get PrimaryKey() As Boolean
+    Dim oColumn         As cColumn
+
+    Set oColumn = pvRs.frColSchema(m_lCol)
+    If Not oColumn Is Nothing Then
+        PrimaryKey = oColumn.PrimaryKey
+    End If
 End Property
 
 Public Property Get AutoIncrement() As Boolean
+    Dim oColumn         As cColumn
+
+    Set oColumn = pvRs.frColSchema(m_lCol)
+    If Not oColumn Is Nothing Then
+        AutoIncrement = oColumn.PrimaryAutoIncrement
+    End If
 End Property
 
 Public Property Get UniqueConstraint() As Boolean
+    Dim oColumn         As cColumn
+
+    Set oColumn = pvRs.frColSchema(m_lCol)
+    If Not oColumn Is Nothing Then
+        UniqueConstraint = oColumn.UniqueConstraint
+    End If
 End Property
 
 Public Property Get ColumnType() As FieldType
@@ -87,6 +127,19 @@ Public Property Get ColumnType() As FieldType
 End Property
 
 Public Property Get DefinedSize() As Long
+    Dim sType           As String
+    Dim lPos            As Long
+    Dim lEnd            As Long
+
+    '--- the size in parentheses of the declared type, e.g. VARCHAR(50)
+    sType = pvRs.frColDeclType(m_lCol)
+    lPos = InStr(sType, "(")
+    If lPos > 0 Then
+        lEnd = InStr(lPos, sType, ")")
+        If lEnd > lPos Then
+            DefinedSize = Val(Mid$(sType, lPos + 1, lEnd - lPos - 1))
+        End If
+    End If
 End Property
 
 Public Property Get ActualSize() As Long

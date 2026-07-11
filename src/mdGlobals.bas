@@ -6,15 +6,21 @@ Option Explicit
 
 '--- for WideCharToMultiByte
 Private Const CP_UTF8                       As Long = 65001
+'--- int64 VARIANT type (no VB6 vbLongLong constant)
+Private Const VT_I8                         As Integer = 20
 
 Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
 Private Declare Function WideCharToMultiByte Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, ByVal lpWideCharStr As Long, ByVal cchWideChar As Long, lpMultiByteStr As Any, ByVal cchMultiByte As Long, ByVal lpDefaultChar As Long, ByVal lpUsedDefaultChar As Long) As Long
 Private Declare Function MultiByteToWideChar Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, lpMultiByteStr As Any, ByVal cchMultiByte As Long, ByVal lpWideCharStr As Long, ByVal cchWideChar As Long) As Long
 Private Declare Function lstrlenA Lib "kernel32" (ByVal lpString As LongPtr) As Long
 Private Declare Function vbaObjSetAddref Lib "msvbvm60" Alias "__vbaObjSetAddref" (oDest As Any, ByVal lSrcPtr As LongPtr) As Long
+Private Declare Sub GetSystemTimePreciseAsFileTime Lib "kernel32" (lpSystemTimeAsFileTime As Currency)
+Private Declare Function FileTimeToLocalFileTime Lib "kernel32" (lpFileTime As Currency, lpLocalFileTime As Currency) As Long
 
 '--- live-instance counter (leak/cycle diagnostic, see cRecordset)
 Public g_lLiveRecordsets            As Long
+'--- monotonicity guard for CreateUniqueID64
+Private m_decLastUniqueId           As Variant
 
 Public Function ToUtf8Array(sText As String) As Byte()
     Dim baRetVal()      As Byte
@@ -79,6 +85,8 @@ Public Function BindVariant(ByVal hStmt As LongPtr, ByVal lIndex As Long, vValue
         Else
             BindVariant = vbsqlite3_bind_double(hStmt, lIndex, CDbl(vValue))
         End If
+    Case VT_I8
+        BindVariant = BindInt64Value(hStmt, lIndex, vValue)
     Case vbDate
         '--- dates are stored as ISO text (see cConnection.GetDateString)
         BindVariant = BindTextValue(hStmt, lIndex, Format$(vValue, "yyyy-mm-dd hh:nn:ss"))
@@ -181,6 +189,42 @@ End Function
 
 Public Function QuoteString(sText As String) As String
     QuoteString = "'" & Replace(sText, "'", "''") & "'"
+End Function
+
+Public Function Int64Variant(vValue As Variant) As Variant
+    Dim vRet            As Variant
+    Dim cyValue         As Currency
+    Dim nVt             As Integer
+
+    '--- build a true VT_I8 variant (matching RC6's int64 results): place
+    '--- the raw int64 bits via the Currency carrier (value scaled by 10000)
+    cyValue = CCur(CDec(vValue) / 10000)
+    nVt = VT_I8
+    Call CopyMemory(vRet, nVt, 2)
+    Call CopyMemory(ByVal VarPtr(vRet) + 8, cyValue, 8)
+    Int64Variant = vRet
+End Function
+
+Public Function CreateUniqueID64() As Variant
+    Dim cyFileTime      As Currency
+    Dim cyLocal         As Currency
+    Dim decId           As Variant
+
+    '--- RC6 format (verified against RC6.dll 3.42.0): local-time VB date
+    '--- serial * 10^14, sub-ms precision from the system clock. FILETIME
+    '--- read as Currency = milliseconds since 1601-01-01; 109205 days lie
+    '--- between that epoch and the VB serial epoch (1899-12-30)
+    Call GetSystemTimePreciseAsFileTime(cyFileTime)
+    Call FileTimeToLocalFileTime(cyFileTime, cyLocal)
+    decId = Int((CDec(cyLocal) / 86400000 - 109205) * CDec("100000000000000"))
+    '--- strictly increasing even within clock granularity
+    If Not IsEmpty(m_decLastUniqueId) Then
+        If decId <= m_decLastUniqueId Then
+            decId = m_decLastUniqueId + 1
+        End If
+    End If
+    m_decLastUniqueId = decId
+    CreateUniqueID64 = Int64Variant(decId)
 End Function
 
 Private Function pvParamIndex(ByVal hStmt As LongPtr, sName As String) As Long

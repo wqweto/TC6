@@ -50,6 +50,7 @@ Private m_eCodecType                As eCodecType
 Private m_dblBusyTimeout            As Double
 Private m_bEnableNestedTransactions As Boolean
 Private m_cTransactionStack         As VBA.Collection
+Private m_oMemDB                    As cMemDB
 
 Public Property Get MapDbNullToEmpty() As Boolean
     MapDbNullToEmpty = m_bMapDbNullToEmpty
@@ -103,6 +104,7 @@ Public Property Get DataBases() As cDataBases
 End Property
 
 Public Property Get UniqueID64() As Variant
+    UniqueID64 = CreateUniqueID64()
 End Property
 
 Public Property Get AffectedRows() As Long
@@ -138,6 +140,10 @@ Public Property Get TransactionStack() As VBA.Collection
 End Property
 
 Public Property Get MemDB() As cMemDB
+    If m_oMemDB Is Nothing Then
+        Set m_oMemDB = New cMemDB
+    End If
+    Set MemDB = m_oMemDB
 End Property
 
 Public Property Get CodecType() As eCodecType
@@ -270,6 +276,32 @@ Public Sub RollbackTrans(Optional ToSavePointName As String, Optional ByVal ReUs
 End Sub
 
 Public Function CopyDatabase(Optional ByVal DstDBFileName As String = ":memory:", Optional ByVal EncrKey As String, Optional ByVal CompactDstDB As Boolean) As cConnection
+    Dim oDst            As cConnection
+    Dim baMain()        As Byte
+    Dim hBackup         As LongPtr
+    Dim lRc             As Long
+
+    If m_hDb = 0 Then
+        Err.Raise vbObjectError, "cConnection.CopyDatabase", "Database is not open"
+    End If
+    Set oDst = New cConnection
+    If Not oDst.CreateNewDB(DstDBFileName, EncrKey) Then
+        Err.Raise vbObjectError, "cConnection.CopyDatabase", "Cannot create '" & DstDBFileName & "'"
+    End If
+    baMain = ToUtf8Array("main" & vbNullChar)
+    hBackup = vbsqlite3_backup_init(oDst.frDbHandle, VarPtr(baMain(0)), m_hDb, VarPtr(baMain(0)))
+    If hBackup = 0 Then
+        Err.Raise vbObjectError, "cConnection.CopyDatabase", oDst.LastDBError()
+    End If
+    lRc = vbsqlite3_backup_step(hBackup, -1)
+    Call vbsqlite3_backup_finish(hBackup)
+    If lRc <> SQLITE_DONE Then
+        Err.Raise vbObjectError, "cConnection.CopyDatabase", oDst.LastDBError()
+    End If
+    If CompactDstDB Then
+        oDst.CompactDataBase
+    End If
+    Set CopyDatabase = oDst
 End Function
 
 Public Sub CompactDataBase()
@@ -376,6 +408,23 @@ Public Sub CreateTableFromADORs(CnnDst As cConnection, ByVal TableName As String
 End Sub
 
 Public Sub CreateTable(TableName As String, Optional FieldDefs As Collection)
+    Dim sDefs           As String
+    Dim vElem           As Variant
+
+    '--- each FieldDefs item is a verbatim column definition, e.g. "F1 Text"
+    If FieldDefs Is Nothing Then
+        Err.Raise 5, "cConnection.CreateTable", "FieldDefs required"
+    End If
+    For Each vElem In FieldDefs
+        If Len(sDefs) > 0 Then
+            sDefs = sDefs & ", "
+        End If
+        sDefs = sDefs & vElem
+    Next
+    If Len(sDefs) = 0 Then
+        Err.Raise 5, "cConnection.CreateTable", "FieldDefs is empty"
+    End If
+    Execute "CREATE TABLE " & QuoteIdentifier(TableName) & " (" & sDefs & ")"
 End Sub
 
 Public Function NewFieldDefs() As Collection
@@ -383,25 +432,30 @@ Public Function NewFieldDefs() As Collection
 End Function
 
 Public Function GetRs(ByVal SQL As String, ParamArray P() As Variant) As cRecordset
-    Dim oRs             As cRecordset
     Dim vParams()       As Variant
 
     vParams = P
-    Set oRs = New cRecordset
-    oRs.frOpenParams Me, SQL, vParams
-    Set GetRs = oRs
+    Set GetRs = frGetRs(SQL, vParams)
 End Function
 
 Public Sub ExecCmd(ByVal SQL As String, ParamArray P() As Variant)
     Dim vParams()       As Variant
 
     vParams = P
-    pvExecCmd SQL, vParams
+    frExecCmd SQL, vParams
 End Sub
 
 Friend Property Get frDbHandle() As LongPtr
     frDbHandle = m_hDb
 End Property
+
+Friend Function frGetRs(sSql As String, vParams() As Variant) As cRecordset
+    Dim oRs             As cRecordset
+
+    Set oRs = New cRecordset
+    oRs.frOpenParams Me, sSql, vParams
+    Set frGetRs = oRs
+End Function
 
 '--- private helpers ------------------------------------------------------
 
@@ -444,7 +498,7 @@ Private Function pvExec(sSql As String) As Long
     pvExec = vbsqlite3_exec(m_hDb, VarPtr(baSql(0)), 0, 0, 0)
 End Function
 
-Private Sub pvExecCmd(sSql As String, vParams() As Variant)
+Friend Sub frExecCmd(sSql As String, vParams() As Variant)
     Dim baSql()         As Byte
     Dim hStmt           As LongPtr
     Dim lIdx            As Long
