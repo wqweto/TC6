@@ -25,6 +25,9 @@ Public Sub RunRecordsetTests()
     Test_Find
     Test_FieldMetadata
     Test_AutoCreateUniqueID64
+    Test_ContentRoundTrip
+    Test_CreateTableFromRsContent
+    Test_ContentRC6Compat
 End Sub
 
 Private Function pvSeededDb() As cConnection
@@ -105,7 +108,11 @@ Private Sub Test_TypesAndValueMatrix()
     AssertEqLng CLng(oRs.ValueMatrix(0, 0)), 42, "integer via ValueMatrix"
     AssertTrue oRs.ValueMatrix(0, 1) = 3.5, "real via ValueMatrix"
     AssertEqStr CStr(oRs.ValueMatrix(0, 2)), "hi", "text via ValueMatrix"
-    AssertTrue IsNull(oRs.ValueMatrix(0, 3)), "NULL cell is Null"
+    AssertTrue IsEmpty(oRs.ValueMatrix(0, 3)), "NULL cell maps to Empty (RC6 default)"
+    '--- MapDbNullToEmpty = False surfaces true Nulls instead
+    oCnn.MapDbNullToEmpty = False
+    Set oRs = oCnn.OpenRecordset("SELECT n FROM v")
+    AssertTrue IsNull(oRs.ValueMatrix(0, 0)), "NULL cell stays Null with MapDbNullToEmpty=False"
     TestEnd
     Exit Sub
 EH:
@@ -384,7 +391,7 @@ Private Sub Test_Sort()
     oCnn.ExecCmd "INSERT INTO t(name, score) VALUES(NULL, 0.5)"
     Set oRs = oCnn.OpenRecordset("SELECT id, name FROM t")
     oRs.Sort = "name"
-    AssertTrue IsNull(oRs.ValueMatrix(0, 1)), "NULL sorts first ascending"
+    AssertTrue IsEmpty(oRs.ValueMatrix(0, 1)), "NULL sorts first ascending"
     oRs.Fields(1).Value = "zzz"
     oRs.SortRefresh
     AssertEqStr CStr(oRs.ValueMatrix(oRs.RecordCount - 1, 1)), "zzz", "SortRefresh re-applies current sort"
@@ -475,7 +482,7 @@ Private Sub Test_AutoCreateUniqueID64()
     AssertTrue Not oRs.AutoCreateUniqueID64, "off by default (matches RC6)"
     oRs.AutoCreateUniqueID64 = True
     oRs.AddNew
-    AssertTrue Not IsNull(oRs.Fields("id").Value), "INTEGER PK auto-filled on AddNew"
+    AssertTrue Not IsEmpty(oRs.Fields("id").Value), "INTEGER PK auto-filled on AddNew"
     AssertTrue CDec(oRs.Fields("id").Value) > CDec("4000000000000000000"), "id has time-based magnitude"
     oRs.Fields("name").Value = "auto"
     oRs.UpdateBatch
@@ -487,6 +494,254 @@ Private Sub Test_AutoCreateUniqueID64()
 EH:
     TestErr
 End Sub
+
+Private Sub Test_ContentRoundTrip()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+    Dim oRs2            As cRecordset
+    Dim baContent()     As Byte
+    Dim baBlob()        As Byte
+
+    If Not TestBegin("cRecordset.ContentRoundTrip") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    oCnn.Execute "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL, data BLOB)"
+    oCnn.Execute "INSERT INTO t VALUES(1, 'alpha', 1.5, NULL)"
+    oCnn.Execute "INSERT INTO t VALUES(2, NULL, NULL, X'010203')"
+    Set oRs = oCnn.OpenRecordset("SELECT id, name, score, data FROM t ORDER BY id")
+    baContent = oRs.Content
+    AssertTrue UBound(baContent) > 100, "Content produces a blob"
+    Set oRs2 = New cRecordset
+    oRs2.Content = baContent
+    AssertEqLng oRs2.RecordCount, 2, "round-trip RecordCount"
+    AssertEqLng CLng(oRs2.Fields.Count), 4, "round-trip field count"
+    AssertTrue oRs2.Updatable, "round-trip stays updatable"
+    oRs2.MoveFirst
+    AssertEqLng CLng(oRs2.Fields("id").Value), 1, "row0 id"
+    AssertEqStr CStr(oRs2.Fields("name").Value), "alpha", "row0 name"
+    AssertTrue oRs2.Fields("score").Value = 1.5, "row0 score"
+    oRs2.MoveNext
+    AssertEqLng CLng(oRs2.Fields("id").Value), 2, "row1 id"
+    AssertTrue IsEmpty(oRs2.Fields("name").Value), "row1 NULL maps to Empty (RC6 default)"
+    baBlob = oRs2.Fields("data").Value
+    AssertEqLng UBound(baBlob) - LBound(baBlob) + 1, 3, "row1 blob length"
+    AssertEqLng CLng(baBlob(2)), 3, "row1 blob bytes"
+    AssertEqStr oRs2.Fields("id").OriginalTableName, "t", "metadata carried: origin table"
+    AssertEqStr oRs2.Fields("id").OriginalDataType, "INTEGER", "metadata carried: decltype"
+    AssertTrue oRs2.Fields("id").PrimaryKey, "metadata carried: PK"
+    AssertEqStr oRs2.SQL, "SELECT id, name, score, data FROM t ORDER BY id", "SQL carried"
+    '--- re-attach a connection: the disconnected blob is updatable again
+    Set oRs2.ActiveConnection = oCnn
+    oRs2.MoveFirst
+    oRs2.Fields("name").Value = "ALPHA"
+    oRs2.UpdateBatch
+    AssertEqStr CStr(oCnn.GetRs("SELECT name FROM t WHERE id = ?", 1).Fields("name").Value), "ALPHA", "UpdateBatch after Content re-attach"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_CreateTableFromRsContent()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+    Dim baContent()     As Byte
+
+    If Not TestBegin("cRecordset.CreateTableFromRsContent") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    baContent = oRs.Content
+    oCnn.CreateTableFromRsContent baContent, "t_copy", False, True
+    AssertEqLng CLng(oCnn.GetRs("SELECT COUNT(*) AS n FROM t_copy").Fields("n").Value), 3, "content rows copied"
+    AssertEqStr CStr(oCnn.GetRs("SELECT name FROM t_copy WHERE id = 2").Fields("name").Value), "beta", "content values copied"
+    AssertTrue oCnn.DataBases("main").Tables("t_copy").Columns("id").PrimaryKey, "WithPrimaryKeys honored"
+    '--- default table name comes from the blob (fresh connection)
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    oCnn.CreateTableFromRsContent baContent
+    AssertEqLng CLng(oCnn.GetRs("SELECT COUNT(*) AS n FROM t").Fields("n").Value), 3, "default name from blob origin table"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_ContentRC6Compat()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+    Dim oRc6Rs          As Object
+    Dim baContent()     As Byte
+
+    If Not TestBegin("cRecordset.ContentRC6Compat") Then Exit Sub
+    On Error GoTo EH
+    '--- requires the original RC6.dll registered on this machine; each case
+    '--- builds identical data in both engines and asserts byte-identity +
+    '--- cross-loading in both directions
+    pvCompatCase "basic", "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL)", _
+        "INSERT INTO t VALUES(1, 'alpha', 1.5), (2, NULL, 2.5)", "SELECT id, name, score FROM t ORDER BY id"
+    pvCompatCase "int64", "CREATE TABLE t(v INTEGER)", _
+        "INSERT INTO t VALUES(9007199254740993), (-9007199254740993), (0)", "SELECT v FROM t"
+    pvCompatCase "bytes_width1", "CREATE TABLE t(v INTEGER)", _
+        "INSERT INTO t VALUES(0), (255), (128)", "SELECT v FROM t"
+    pvCompatCase "int32_width4", "CREATE TABLE t(v INTEGER)", _
+        "INSERT INTO t VALUES(-1), (100), (70000)", "SELECT v FROM t"
+    '--- NB: values like 1e-300 parse 1 ULP apart in SQLite 3.42 (RC6) vs
+    '--- winsqlite3 3.51, so only binary-exact literals are compared here
+    pvCompatCase "reals", "CREATE TABLE t(v REAL)", _
+        "INSERT INTO t VALUES(0.0), (-1.5), (1e300), (0.125)", "SELECT v FROM t"
+    pvCompatCase "text_utf8", "CREATE TABLE t(v TEXT)", _
+        "INSERT INTO t VALUES(CAST(X'D0A2D0B5D181D182' AS TEXT)), ('ab''cd'), ('')", "SELECT v FROM t"
+    pvCompatCase "text_long", "CREATE TABLE t(v TEXT)", _
+        "INSERT INTO t VALUES(replace(hex(zeroblob(200)), '00', 'xy'))", "SELECT v FROM t"
+    pvCompatCase "text_null_mix", "CREATE TABLE t(v TEXT)", _
+        "INSERT INTO t VALUES('a'), (NULL), (''), ('b')", "SELECT v FROM t"
+    pvCompatCase "blob_mix", "CREATE TABLE t(v BLOB)", _
+        "INSERT INTO t VALUES(X''), (NULL), (X'00FF10')", "SELECT v FROM t"
+    pvCompatCase "blob_big", "CREATE TABLE t(v BLOB)", _
+        "INSERT INTO t VALUES(zeroblob(100)), (X'01')", "SELECT v FROM t"
+    pvCompatCase "many_rows", "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)", _
+        "INSERT INTO t(v) WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 20) SELECT 'r' || x FROM c", _
+        "SELECT id, v FROM t ORDER BY id"
+    pvCompatCase "expr_num", "CREATE TABLE t(i INTEGER)", _
+        "INSERT INTO t VALUES(1), (2)", "SELECT i + 1 AS e, i * 2.5 AS f FROM t"
+    pvCompatCase "expr_text", "CREATE TABLE t(i INTEGER)", _
+        "INSERT INTO t VALUES(1)", "SELECT 'x' || i AS e FROM t"
+    pvCompatCase "mixed_expr", "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)", _
+        "INSERT INTO t(v) VALUES('a')", "SELECT id, v, length(v) AS len FROM t"
+    pvCompatCase "join_2tables", "CREATE TABLE a(i INTEGER); CREATE TABLE b(j INTEGER)", _
+        "INSERT INTO a VALUES(1); INSERT INTO b VALUES(2)", "SELECT i, j FROM a, b"
+    pvCompatCase "no_pk", "CREATE TABLE t(v TEXT)", _
+        "INSERT INTO t VALUES('x')", "SELECT v FROM t"
+    pvCompatCase "constraints", "CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, u TEXT UNIQUE, d TEXT DEFAULT 'dv', n TEXT NOT NULL DEFAULT 'x' COLLATE NOCASE)", _
+        "INSERT INTO t(u, n) VALUES('a', 'b')", "SELECT id, u, d, n FROM t"
+    pvCompatCase "exotic_names", "CREATE TABLE [my tab]([my col] TEXT, [select] INTEGER)", _
+        "INSERT INTO [my tab] VALUES('v', 1)", "SELECT [my col], [select] FROM [my tab]"
+    pvCompatCase "empty_rs", "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)", _
+        vbNullString, "SELECT id, v FROM t"
+    pvCompatCase "num_default", "CREATE TABLE t(id INTEGER PRIMARY KEY, q REAL DEFAULT 2.5)", _
+        "INSERT INTO t DEFAULT VALUES", "SELECT id, q FROM t"
+    pvCompatCase "agg_minmax", "CREATE TABLE t(v INTEGER)", _
+        "INSERT INTO t VALUES(5), (1), (9)", "SELECT MAX(v) AS mx, MIN(v) AS mn, COUNT(*) AS cnt FROM t"
+    pvCompatCase "agg_group", "CREATE TABLE t(g TEXT, v REAL)", _
+        "INSERT INTO t VALUES('a', 1.5), ('a', 2.5), ('b', 10)", "SELECT g, SUM(v) AS s, AVG(v) AS av FROM t GROUP BY g ORDER BY g"
+    '--- metadata survives an RC6 load of a TC6 blob
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    oCnn.Execute "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT)"
+    oCnn.Execute "INSERT INTO t VALUES(1, 'alpha')"
+    Set oRs = oCnn.OpenRecordset("SELECT id, name FROM t")
+    baContent = oRs.Content
+    Set oRc6Rs = CreateObject("RC6.cRecordset")
+    oRc6Rs.Content = baContent
+    AssertTrue oRc6Rs.Updatable, "RC6 loads TC6 blob: Updatable"
+    AssertTrue oRc6Rs.Fields("id").PrimaryKey, "RC6 loads TC6 blob: PK metadata"
+    AssertEqStr CStr(oRc6Rs.Fields("id").OriginalDataType), "INTEGER", "RC6 loads TC6 blob: decltype"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub pvCompatCase(sCase As String, sDdl As String, sIns As String, sSel As String)
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+    Dim oRs2            As cRecordset
+    Dim oRc6Cnn         As Object
+    Dim oRc6Rs          As Object
+    Dim baTc6()         As Byte
+    Dim baRc6()         As Byte
+    Dim lIdx            As Long
+    Dim lRow            As Long
+    Dim lCol            As Long
+    Dim bSame           As Boolean
+
+    '--- identical data in both engines
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    oCnn.Execute sDdl
+    If Len(sIns) > 0 Then
+        oCnn.Execute sIns
+    End If
+    Set oRs = oCnn.OpenRecordset(sSel)
+    baTc6 = oRs.Content
+    Set oRc6Cnn = CreateObject("RC6.cConnection")
+    oRc6Cnn.CreateNewDB ":memory:"
+    oRc6Cnn.Execute sDdl
+    If Len(sIns) > 0 Then
+        oRc6Cnn.Execute sIns
+    End If
+    Set oRc6Rs = oRc6Cnn.OpenRecordset(sSel)
+    baRc6 = oRc6Rs.Content
+    '--- byte-identical outside the two ignored heap-pointer slots
+    bSame = (UBound(baTc6) = UBound(baRc6))
+    If bSame Then
+        For lIdx = 0 To UBound(baTc6)
+            If baTc6(lIdx) <> baRc6(lIdx) Then
+                If Not ((lIdx >= &H1C And lIdx <= &H1F) Or (lIdx >= &H28 And lIdx <= &H2B)) Then
+                    bSame = False
+                    Exit For
+                End If
+            End If
+        Next
+    Else
+        lIdx = -1
+    End If
+    AssertTrue bSame, sCase & ": blob byte-identical to RC6 (size " & (UBound(baTc6) + 1) & " vs " & (UBound(baRc6) + 1) & ", diff at &H" & Hex$(lIdx) & ")"
+    '--- RC6 loads the TC6 blob
+    Set oRc6Rs = CreateObject("RC6.cRecordset")
+    oRc6Rs.Content = baTc6
+    AssertEqLng oRc6Rs.RecordCount, oRs.RecordCount, sCase & ": RC6 loads TC6 blob"
+    '--- TC6 loads the RC6 blob and every cell matches the original
+    Set oRs2 = New cRecordset
+    oRs2.Content = baRc6
+    bSame = (oRs2.RecordCount = oRs.RecordCount And oRs2.Fields.Count = oRs.Fields.Count)
+    If bSame Then
+        For lRow = 0 To oRs.RecordCount - 1
+            For lCol = 0 To oRs.Fields.Count - 1
+                If Not pvCellsEqual(oRs.ValueMatrix(lRow, lCol), oRs2.ValueMatrix(lRow, lCol)) Then
+                    bSame = False
+                End If
+            Next
+        Next
+    End If
+    AssertTrue bSame, sCase & ": TC6 round-trips the RC6 blob cell-for-cell"
+End Sub
+
+Private Function pvCellsEqual(vLeft As Variant, vRight As Variant) As Boolean
+    Dim baLeft()        As Byte
+    Dim baRight()       As Byte
+    Dim lIdx            As Long
+
+    If IsNull(vLeft) Or IsEmpty(vLeft) Or IsNull(vRight) Or IsEmpty(vRight) Then
+        pvCellsEqual = (IsNull(vLeft) Or IsEmpty(vLeft)) And (IsNull(vRight) Or IsEmpty(vRight))
+    ElseIf VarType(vLeft) = vbByte + vbArray Or VarType(vRight) = vbByte + vbArray Then
+        If VarType(vLeft) <> VarType(vRight) Then
+            Exit Function
+        End If
+        baLeft = vLeft
+        baRight = vRight
+        If pvArrLen(baLeft) <> pvArrLen(baRight) Then
+            Exit Function
+        End If
+        For lIdx = 0 To pvArrLen(baLeft) - 1
+            If baLeft(lIdx) <> baRight(lIdx) Then
+                Exit Function
+            End If
+        Next
+        pvCellsEqual = True
+    Else
+        On Error Resume Next
+        pvCellsEqual = (vLeft = vRight)
+    End If
+End Function
+
+Private Function pvArrLen(baBuf() As Byte) As Long
+    On Error GoTo QH
+    pvArrLen = UBound(baBuf) - LBound(baBuf) + 1
+QH:
+End Function
 
 '--- these two tests pin the FINAL contract, matching original RC6 behavior
 '--- (verified against RC6.dll 3.42.0): an orphaned/stale cField raises

@@ -109,7 +109,7 @@ Private Sub Test_CommandSetters()
     AssertEqLng CLng(oRs.Fields("b").Value), 1, "SetBoolean True as 1"
     baOut = oRs.Fields("data").Value
     AssertEqLng CLng(baOut(1)), 9, "SetBlob round-trips"
-    AssertTrue IsNull(oRs.Fields("x").Value), "SetNull binds NULL"
+    AssertTrue IsEmpty(oRs.Fields("x").Value), "SetNull binds NULL (maps to Empty)"
     '--- SetAllParamsNull clears every binding
     oCmd.SetAllParamsNull
     AssertTrue oCmd.Execute(), "Execute after SetAllParamsNull succeeds"

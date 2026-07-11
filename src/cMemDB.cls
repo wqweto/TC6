@@ -118,13 +118,22 @@ Public Sub RollbackTrans(Optional ToSavePointName As String, Optional ByVal ReUs
 End Sub
 
 Public Sub CreateTableFromRs(AdoOrSQLiteRsOrByteContent As Variant, ByVal DstTableName As String, Optional ByVal WithPrimaryKeys As Boolean)
+    Dim oRs             As cRecordset
+    Dim baContent()     As Byte
+
     If IsObject(AdoOrSQLiteRsOrByteContent) Then
         If TypeOf AdoOrSQLiteRsOrByteContent Is cRecordset Then
-            pvCreateTableFromRs AdoOrSQLiteRsOrByteContent, DstTableName, WithPrimaryKeys
+            CreateTableFromRecordset m_oCnn, AdoOrSQLiteRsOrByteContent, DstTableName, False, WithPrimaryKeys
             Exit Sub
         End If
+    ElseIf IsArray(AdoOrSQLiteRsOrByteContent) Then
+        baContent = AdoOrSQLiteRsOrByteContent
+        Set oRs = New cRecordset
+        oRs.Content = baContent
+        CreateTableFromRecordset m_oCnn, oRs, DstTableName, False, WithPrimaryKeys
+        Exit Sub
     End If
-    Err.Raise vbObjectError, "cMemDB.CreateTableFromRs", "Only cRecordset sources are implemented yet"
+    Err.Raise vbObjectError, "cMemDB.CreateTableFromRs", "Only cRecordset and Content byte-array sources are implemented yet"
 End Sub
 
 Public Function CreateCursor(SQL As String) As cCursor
@@ -140,51 +149,6 @@ Private Function pvTableSql(sSelect As String, sTable As String, sWhere As Strin
         pvTableSql = pvTableSql & " ORDER BY " & sOrderBy
     End If
 End Function
-
-Private Sub pvCreateTableFromRs(ByVal oSrc As cRecordset, sTable As String, ByVal bWithPrimaryKeys As Boolean)
-    Dim oField          As cField
-    Dim sDefs           As String
-    Dim sCols           As String
-    Dim sVals           As String
-    Dim sType           As String
-    Dim lRow            As Long
-    Dim lCol            As Long
-    Dim aParams()       As Variant
-
-    '--- column definitions from the source recordset's field metadata
-    For Each oField In oSrc.Fields
-        If Len(sDefs) > 0 Then
-            sDefs = sDefs & ", "
-            sCols = sCols & ", "
-            sVals = sVals & ", "
-        End If
-        sType = oField.OriginalDataType
-        If Len(sType) = 0 Then
-            sType = "TEXT"
-        End If
-        sDefs = sDefs & QuoteIdentifier(oField.Name) & " " & sType
-        If bWithPrimaryKeys Then
-            If oField.PrimaryKey Then
-                sDefs = sDefs & " PRIMARY KEY"
-            End If
-        End If
-        sCols = sCols & QuoteIdentifier(oField.Name)
-        sVals = sVals & "?"
-    Next
-    If Len(sDefs) = 0 Then
-        Err.Raise 5, "cMemDB.CreateTableFromRs", "Source recordset has no fields"
-    End If
-    m_oCnn.Execute "CREATE TABLE " & QuoteIdentifier(sTable) & " (" & sDefs & ")"
-    If oSrc.RecordCount > 0 Then
-        ReDim aParams(0 To oSrc.Fields.Count - 1)
-        For lRow = 0 To oSrc.RecordCount - 1
-            For lCol = 0 To oSrc.Fields.Count - 1
-                aParams(lCol) = oSrc.ValueMatrix(lRow, lCol)
-            Next
-            m_oCnn.frExecCmd "INSERT INTO " & QuoteIdentifier(sTable) & " (" & sCols & ") VALUES (" & sVals & ")", aParams
-        Next
-    End If
-End Sub
 
 Private Sub Class_Initialize()
     Set m_oCnn = New cConnection

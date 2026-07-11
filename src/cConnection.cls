@@ -409,6 +409,30 @@ Public Function RemoveUserDefinedCollation(New_ObjectIColl As ICollation) As Boo
 End Function
 
 Public Sub CreateTableFromRsContent(Content() As Byte, Optional NewTableName As String, Optional ByVal AsTempTable As Boolean, Optional ByVal WithPrimaryKeys As Boolean)
+    Dim oRs             As cRecordset
+    Dim sTable          As String
+    Dim lCol            As Long
+    Dim baTemp()        As Byte
+
+    '--- VB6 bug: assigning a ByRef array PARAMETER straight to a Property
+    '--- Let crashes at runtime - copy to a local first
+    baTemp = Content
+    Set oRs = New cRecordset
+    oRs.Content = baTemp
+    sTable = NewTableName
+    If Len(sTable) = 0 Then
+        '--- default to the origin table carried by the blob
+        For lCol = 0 To oRs.frFieldCount - 1
+            sTable = oRs.frColOriginTable(lCol)
+            If Len(sTable) > 0 Then
+                Exit For
+            End If
+        Next
+    End If
+    If Len(sTable) = 0 Then
+        Err.Raise 5, "cConnection.CreateTableFromRsContent", "Table name required"
+    End If
+    CreateTableFromRecordset Me, oRs, sTable, AsTempTable, WithPrimaryKeys
 End Sub
 
 Public Sub CreateTableFromADORs(CnnDst As cConnection, ByVal TableName As String, AdoRs As Object, Optional arrDataTypes As Variant)

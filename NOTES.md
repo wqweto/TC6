@@ -340,9 +340,10 @@ type. `cTestHost` is `MultiUse`.
       a strictly-increasing guard; `cRecordset.UniqueID64ToVBDate` is the
       exact inverse (+ sub-second remainder out-param). With
       `AutoCreateUniqueID64 = True` (default False, matches RC6) `AddNew`
-      fills the INTEGER PK with a fresh id. NB (probed): RC6's `AddNew`
-      leaves other new-row cells **Empty** while TC6 sets `Null` — minor
-      divergence, revisit with the Content work.
+      fills the INTEGER PK with a fresh id. DB NULLs (and `AddNew` cells)
+      surface as **Empty** per `cConnection.MapDbNullToEmpty` — default
+      True, `False` yields `Null` (probed against RC6 directly; the flag
+      is copied onto the recordset at open time).
 - [x] UDF/collation subsystem — `cConnection.Add/RemoveUserDefined*` over
       `create_function_v2`/`create_collation` with **plain VB6 AddressOf
       trampolines** in [src/mdUdf.bas](src/mdUdf.bas) (winsqlite3's whole
@@ -359,11 +360,14 @@ type. `cTestHost` is `MultiUse`.
       truncated result). Slots are released when their connection closes.
       `IFunction`/`IAggregateFunction`/`ICollation` stay empty by design —
       users Implements them.
-- [ ] Content serialization (`Content`/`ContentChangesOnly`/
-      `CreateTableFromRsContent`/`GetADORsFromContent`), `ToJSONUTF8`,
-      `GetRowsWithHeaders` — **decision: RC6-compatible format** (user);
-      the blob layout has been reverse-engineered by differential probing
-      (see the Content-format section below), implementation in progress.
+- [x] `Content` Get/Let in the RC6-compatible blob format (byte-identical,
+      cross-loads with the real RC6.dll both ways — see the format section
+      below), `CreateTableFromRsContent` (default name from the blob's
+      origin table, TEMP + WithPrimaryKeys options) and the
+      `cMemDB.CreateTableFromRs` byte-content flavor over a shared
+      `mdGlobals.CreateTableFromRecordset`.
+- [ ] `ContentChangesOnly` (changed-rows flavor of the blob),
+      `GetADORsFromContent` (ADO tail), `ToJSONUTF8`, `GetRowsWithHeaders`.
 
 ## RC6 `Content` blob format (reverse-engineered, RC6.dll 3.42.0)
 
@@ -372,33 +376,59 @@ scripts in the session scratchpad). All numbers little-endian; strings are
 `[Long cbBytes][UTF-16 chars]` (no terminator); per-row arrays allocate
 **rows+1 elements** (one spare slot, presumably AddNew staging).
 
+Implemented in `cRecordset.Content` Get/Let (`pvContentWrite`/
+`pvContentRead`); **TC6-written blobs are byte-identical to RC6's** for the
+probed scenarios (outside the two ignored pointer slots) and cross-load in
+both directions — pinned by the `ContentRC6Compat` test which drives the
+real RC6.dll via COM. `ContentChangesOnly` (changed-rows-only flavor with
+original values) is still unimplemented.
+
 - **Header** (0x00): `Long cbTotal` (= blob size incl. itself), `Long
   RecordCount` ×3, `Long 0`, `Long CurRow` (−1 when empty), `Long
   4*(rows+1)`, `Long ptrGarbage`, `Long RecordCount`, `Long 0`, `Long
-  ptrGarbage`, then zeros to 0x40 — the pointer slots are raw heap
-  addresses dumped from RC6's internal structures and are ignored on load
-  (verified: round-trip works across processes). One more `Long` before
-  the filename (1 when the result has an INTEGER PK column, 0 otherwise —
-  exact meaning TBC).
+  ptrGarbage`, 5 zero `Long`s — the pointer slots are raw heap addresses
+  dumped from RC6's internal structures and are ignored on load (verified:
+  round-trip works across processes). Then the **row-order chain**: one
+  `Long` per row holding the next row's index, natural order = `{1, 2,
+  ..., N-1, 0}` (empty for 0 rows).
 - **Strings**: DB filename (`:memory:`), the SQL text.
 - **`Long FieldCount`**, then per field:
   - strings: db (`main`), `[table]`, `[column]` (bracketed), declared
     type, default value (`NULL` when none, else the text unquoted, e.g.
-    `x` for `DEFAULT 'x'`), collation (`BINARY`), plain field name;
-  - fixed block: `Long 0` (TBC, poss. DefinedSize), `Long NotNull`,
-    `Byte Unique`, `Byte PK`, `Byte AutoInc`, `Long Type` (1=INTEGER,
-    2=FLOAT, 3=TEXT, 4=BLOB, from the decltype), `Byte 0`, `Long W` —
-    for INTEGER columns the width class (1/2/4/8 = smallest byte width
-    holding every value in the column), else 0;
+    `x` for `DEFAULT 'x'`), collation (`BINARY`), plain field name — all
+    six metadata strings are **empty** for expression columns;
+  - fixed block: `Long OriginTableIndex` (index into the tail's DML-set
+    list, 0 for expressions), `Long ColumnOrdinal`, `Byte NotNull`,
+    `Byte PK`, `Byte AutoInc` (UNIQUE is **not** serialized), `Long Type`
+    (1=INTEGER, 2=FLOAT, 3=TEXT, 4=BLOB from the decltype; empty decltype
+    → by the first value's storage class: text 3, blob 4, else 2 with
+    values stored as doubles), `Byte 0`, `Long W` — for INTEGER columns
+    the width class (1 = all values 0..255, 4 = int32, else 8; **the PK
+    column is always ≥ 4**), else 0;
   - `[Long cb=rows+1][per-row not-null flag bytes + spare]`;
-  - data: INTEGER `[Long cb=(rows+1)*W][values, W bytes each LE]`; REAL
-    `[Long cb=(rows+1)*8][doubles]`; TEXT/BLOB `[Long cbContent][all
-    content bytes back-to-back, text as UTF-8]` followed by an offsets
-    array `[Long cb=(rows+1)*4][Long start offsets per row, final entry
-    = cbContent]` (NULL rows have flag 0 and zero-length spans).
-- **Tail**: `Long 1`, three precomputed DML template strings
-  (`DELETE FROM [t] `, `UPDATE [t] SET `, `INSERT INTO [t] (`),
-  `Long 1`, ~0x30 zero bytes (TBC — sort/find state?).
+  - data: INTEGER `[Long cb=(rows+1)*W][values, W bytes each LE]` +
+    `Long 0`; REAL `[Long cb=(rows+1)*8][doubles]` + `Long 0`; TEXT/BLOB
+    `[Long cbContent][all content bytes back-to-back, text as UTF-8]`
+    followed by an offsets array `[Long cb=(rows+1)*4][Long start offsets
+    per row, final entry = cbContent]` (NULL rows have flag 0 and
+    zero-length spans; no trailing `Long`).
+- **Tail**: `Long cTables` = number of distinct origin tables
+  (first-appearance order, 0 for expression-only selects), then per
+  table: three DML template strings (`DELETE FROM [t] `, `UPDATE [t]
+  SET `, `INSERT INTO [t] (`), `Long cKeyCols` + that many `Long`
+  result-column ordinals — the table's PK columns as selected, or **all
+  of its selected columns** when it has no PK. Then exactly **42 zero
+  bytes**, and the whole blob is **padded to even length**.
+- **Events**: RC6 raises no events on `Content` Let (verified via
+  `WScript.ConnectObject`); TC6 matches (no `QueryFinished`).
+
+NB: SQLite 3.42 (RC6) and winsqlite3 3.51 parse some decimal literals
+(e.g. `1e-300`) 1 ULP apart, so byte-compares must use binary-exact REAL
+test values.
+
+NB: `cConnection.CreateTableFromRsContent` hit a **VB6 codegen bug** —
+assigning a ByRef array *parameter* directly to a `Property Let` crashes at
+runtime (0xC000008F); the parameter must be copied to a local array first.
 - [ ] Tail / possibly out of scope for v1: DDL-parsing members
       (`cColumn.OriginalConstraint`/`ConstraintName`/`CheckExpression`/
       `PrimarySortOrder`, `cTable.Constraint`), `cCommand`/

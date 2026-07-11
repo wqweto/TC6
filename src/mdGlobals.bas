@@ -202,6 +202,51 @@ Public Function QuoteString(sText As String) As String
     QuoteString = "'" & Replace(sText, "'", "''") & "'"
 End Function
 
+Public Sub CreateTableFromRecordset(oCnn As cConnection, ByVal oSrc As cRecordset, sTable As String, ByVal bTempTable As Boolean, ByVal bWithPrimaryKeys As Boolean)
+    Dim oField          As cField
+    Dim sDefs           As String
+    Dim sCols           As String
+    Dim sVals           As String
+    Dim sType           As String
+    Dim lRow            As Long
+    Dim lCol            As Long
+    Dim aParams()       As Variant
+
+    '--- column definitions from the source recordset's field metadata
+    For Each oField In oSrc.Fields
+        If Len(sDefs) > 0 Then
+            sDefs = sDefs & ", "
+            sCols = sCols & ", "
+            sVals = sVals & ", "
+        End If
+        sType = oField.OriginalDataType
+        If Len(sType) = 0 Then
+            sType = "TEXT"
+        End If
+        sDefs = sDefs & QuoteIdentifier(oField.Name) & " " & sType
+        If bWithPrimaryKeys Then
+            If oField.PrimaryKey Then
+                sDefs = sDefs & " PRIMARY KEY"
+            End If
+        End If
+        sCols = sCols & QuoteIdentifier(oField.Name)
+        sVals = sVals & "?"
+    Next
+    If Len(sDefs) = 0 Then
+        Err.Raise 5, "CreateTableFromRecordset", "Source recordset has no fields"
+    End If
+    oCnn.Execute "CREATE " & IIf(bTempTable, "TEMP ", vbNullString) & "TABLE " & QuoteIdentifier(sTable) & " (" & sDefs & ")"
+    If oSrc.RecordCount > 0 Then
+        ReDim aParams(0 To oSrc.Fields.Count - 1)
+        For lRow = 0 To oSrc.RecordCount - 1
+            For lCol = 0 To oSrc.Fields.Count - 1
+                aParams(lCol) = oSrc.ValueMatrix(lRow, lCol)
+            Next
+            oCnn.frExecCmd "INSERT INTO " & QuoteIdentifier(sTable) & " (" & sCols & ") VALUES (" & sVals & ")", aParams
+        Next
+    End If
+End Sub
+
 Public Function Int64Variant(vValue As Variant) As Variant
     Dim vRet            As Variant
     Dim cyValue         As Currency

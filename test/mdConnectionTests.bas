@@ -198,7 +198,7 @@ Private Sub Test_ExecCmd()
     AssertEqLng oRs.RecordCount, 1, "row retrievable by bound id"
     AssertEqStr CStr(oRs.Fields("name").Value), "hello", "bound text stored"
     AssertTrue oRs.Fields("amount").Value = 3.5, "bound double stored"
-    AssertTrue IsNull(oRs.Fields("note").Value), "bound Null stored as NULL"
+    AssertTrue IsEmpty(oRs.Fields("note").Value), "bound Null stored as NULL (maps to Empty)"
     TestEnd
     Exit Sub
 EH:
