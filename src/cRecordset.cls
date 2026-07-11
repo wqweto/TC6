@@ -301,6 +301,27 @@ Friend Sub frOpen(oCnn As cConnection, sSql As String, ByVal bReadOnly As Boolea
     pvLoad
 End Sub
 
+Friend Sub frOpenParams(oCnn As cConnection, sSql As String, vParams() As Variant)
+    Dim hStmt           As LongPtr
+    Dim lIdx            As Long
+
+    Set m_oConnection = oCnn
+    m_sSql = sSql
+    hStmt = pvPrepare(sSql)
+    On Error GoTo EH
+    For lIdx = LBound(vParams) To UBound(vParams)
+        If BindVariant(hStmt, lIdx - LBound(vParams) + 1, vParams(lIdx)) <> SQLITE_OK Then
+            Err.Raise vbObjectError, "cRecordset", m_oConnection.LastDBError()
+        End If
+    Next
+    pvMaterialize hStmt
+    Exit Sub
+EH:
+    '--- pvMaterialize would have finalized; a bind error must not leak it
+    Call vbsqlite3_finalize(hStmt)
+    Err.Raise Err.Number, Err.Source, Err.Description
+End Sub
+
 Friend Function frFieldCount() As Long
     frFieldCount = m_lFieldCount
 End Function
@@ -338,22 +359,29 @@ Friend Function frCellValueAt(ByVal lRow As Long, ByVal lCol As Long) As Variant
 End Function
 
 Private Sub pvLoad()
+    pvMaterialize pvPrepare(m_sSql)
+End Sub
+
+Private Function pvPrepare(sSql As String) As LongPtr
     Dim baSql()         As Byte
     Dim hStmt           As LongPtr
-    Dim lRc             As Long
-    Dim lCol            As Long
-    Dim lRow            As Long
-    Dim lCap            As Long
 
     pvClear
     If m_oConnection Is Nothing Then
         Err.Raise vbObjectError, "cRecordset", "No active connection"
     End If
-    baSql = ToUtf8Array(m_sSql & vbNullChar)
-    lRc = vbsqlite3_prepare_v2(m_oConnection.frDbHandle, VarPtr(baSql(0)), -1, VarPtr(hStmt), 0)
-    If lRc <> SQLITE_OK Then
+    baSql = ToUtf8Array(sSql & vbNullChar)
+    If vbsqlite3_prepare_v2(m_oConnection.frDbHandle, VarPtr(baSql(0)), -1, VarPtr(hStmt), 0) <> SQLITE_OK Then
         Err.Raise vbObjectError, "cRecordset", m_oConnection.LastDBError()
     End If
+    pvPrepare = hStmt
+End Function
+
+Private Sub pvMaterialize(ByVal hStmt As LongPtr)
+    Dim lCol            As Long
+    Dim lRow            As Long
+    Dim lCap            As Long
+
     m_lFieldCount = vbsqlite3_column_count(hStmt)
     lCap = 16
     If m_lFieldCount > 0 Then

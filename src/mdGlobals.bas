@@ -58,3 +58,77 @@ End Function
 Public Function ObjectFromPtr(ByVal pObj As LongPtr) As IUnknown
     Call vbaObjSetAddref(ObjectFromPtr, pObj)
 End Function
+
+Public Function BindVariant(ByVal hStmt As LongPtr, ByVal lIndex As Long, vValue As Variant) As Long
+    Dim baBuf()         As Byte
+
+    '--- bind a VB value to a 1-based statement parameter; text/blob use
+    '--- SQLITE_TRANSIENT so SQLite copies the buffer before we free it
+    Select Case VarType(vValue)
+    Case vbNull, vbEmpty
+        BindVariant = vbsqlite3_bind_null(hStmt, lIndex)
+    Case vbBoolean
+        BindVariant = vbsqlite3_bind_int(hStmt, lIndex, IIf(vValue, 1, 0))
+    Case vbByte, vbInteger, vbLong
+        BindVariant = vbsqlite3_bind_int(hStmt, lIndex, CLng(vValue))
+    Case vbCurrency, vbDecimal
+        '--- int64 carrier types: a double round-trip would lose precision
+        '--- above 2^53, so integral values go through bind_int64
+        If vValue = Int(vValue) Then
+            BindVariant = BindInt64Value(hStmt, lIndex, vValue)
+        Else
+            BindVariant = vbsqlite3_bind_double(hStmt, lIndex, CDbl(vValue))
+        End If
+    Case vbDate
+        '--- dates are stored as ISO text (see cConnection.GetDateString)
+        BindVariant = BindTextValue(hStmt, lIndex, Format$(vValue, "yyyy-mm-dd hh:nn:ss"))
+    Case vbSingle, vbDouble
+        BindVariant = vbsqlite3_bind_double(hStmt, lIndex, CDbl(vValue))
+    Case vbByte + vbArray
+        baBuf = vValue
+        BindVariant = BindBlobValue(hStmt, lIndex, baBuf)
+    Case Else
+        BindVariant = BindTextValue(hStmt, lIndex, CStr(vValue))
+    End Select
+End Function
+
+Public Function BindInt64Value(ByVal hStmt As LongPtr, ByVal lIndex As Long, vValue As Variant) As Long
+#If Win64 Then
+    BindInt64Value = vbsqlite3_bind_int64(hStmt, lIndex, CLngLng(vValue))
+#Else
+    '--- the x86 declare types the int64 as Currency (raw bits = value*10000),
+    '--- so scale the integral value down by 10000 to place it into those bits
+    BindInt64Value = vbsqlite3_bind_int64(hStmt, lIndex, CCur(CDec(vValue) / 10000))
+#End If
+End Function
+
+Public Function BindTextValue(ByVal hStmt As LongPtr, ByVal lIndex As Long, sText As String) As Long
+    Dim baBuf()         As Byte
+    Dim lLen            As Long
+
+    baBuf = ToUtf8Array(sText)
+    lLen = pvArrayByteLen(baBuf)
+    If lLen = 0 Then
+        ReDim baBuf(0 To 0)
+    End If
+    BindTextValue = vbsqlite3_bind_text(hStmt, lIndex, VarPtr(baBuf(0)), lLen, SQLITE_TRANSIENT)
+End Function
+
+Public Function BindBlobValue(ByVal hStmt As LongPtr, ByVal lIndex As Long, baBuf() As Byte) As Long
+    Dim lLen            As Long
+
+    lLen = pvArrayByteLen(baBuf)
+    If lLen > 0 Then
+        BindBlobValue = vbsqlite3_bind_blob(hStmt, lIndex, VarPtr(baBuf(0)), lLen, SQLITE_TRANSIENT)
+    Else
+        '--- an empty (non-NULL) blob needs zeroblob; bind_blob with a NULL
+        '--- pointer would bind SQL NULL instead
+        BindBlobValue = vbsqlite3_bind_zeroblob(hStmt, lIndex, 0)
+    End If
+End Function
+
+Private Function pvArrayByteLen(baBuf() As Byte) As Long
+    On Error GoTo QH
+    pvArrayByteLen = UBound(baBuf) - LBound(baBuf) + 1
+QH:
+End Function

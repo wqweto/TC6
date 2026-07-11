@@ -13,6 +13,10 @@ Public Sub RunConnectionTests()
     Test_ExecuteRaisesOnBadSql
     Test_ErrorInfo
     Test_DateHelpers
+    Test_GetRs
+    Test_ExecCmd
+    Test_ExecCmdBlob
+    Test_BindInt64AndDate
 End Sub
 
 Private Sub Test_Version()
@@ -150,6 +154,102 @@ Private Sub Test_ErrorInfo()
     On Error GoTo EH
     AssertTrue InStr(oCnn.LastDBError(), "nosuchtable") > 0, "LastDBError mentions the missing table"
     AssertEqLng oCnn.LastDBErrCode(), 1, "LastDBErrCode is SQLITE_ERROR"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_GetRs()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+
+    If Not TestBegin("cConnection.GetRs") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    oCnn.Execute "CREATE TABLE t(id INTEGER, name TEXT)"
+    oCnn.Execute "INSERT INTO t VALUES(1, 'a'), (2, 'b'), (3, 'c')"
+    Set oRs = oCnn.GetRs("SELECT id, name FROM t WHERE id >= ? AND name <> ? ORDER BY id", 2, "c")
+    AssertEqLng oRs.RecordCount, 1, "parameterised filter returns one row"
+    AssertEqLng CLng(oRs.Fields("id").Value), 2, "bound integer parameter"
+    AssertEqStr CStr(oRs.Fields("name").Value), "b", "bound text parameter"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_ExecCmd()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+
+    If Not TestBegin("cConnection.ExecCmd") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    oCnn.Execute "CREATE TABLE t(id INTEGER, name TEXT, amount REAL, note TEXT)"
+    oCnn.ExecCmd "INSERT INTO t(id, name, amount, note) VALUES(?, ?, ?, ?)", 5, "hello", 3.5, Null
+    AssertEqLng oCnn.AffectedRows, 1, "ExecCmd inserts one row"
+    Set oRs = oCnn.GetRs("SELECT id, name, amount, note FROM t WHERE id = ?", 5)
+    AssertEqLng oRs.RecordCount, 1, "row retrievable by bound id"
+    AssertEqStr CStr(oRs.Fields("name").Value), "hello", "bound text stored"
+    AssertTrue oRs.Fields("amount").Value = 3.5, "bound double stored"
+    AssertTrue IsNull(oRs.Fields("note").Value), "bound Null stored as NULL"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_ExecCmdBlob()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+    Dim baIn(0 To 2)    As Byte
+    Dim baOut()         As Byte
+
+    If Not TestBegin("cConnection.ExecCmdBlob") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    oCnn.Execute "CREATE TABLE b(data BLOB)"
+    baIn(0) = 10
+    baIn(1) = 20
+    baIn(2) = 30
+    oCnn.ExecCmd "INSERT INTO b VALUES(?)", baIn
+    Set oRs = oCnn.GetRs("SELECT data FROM b")
+    baOut = oRs.Fields("data").Value
+    AssertEqLng UBound(baOut) - LBound(baOut) + 1, 3, "bound blob length round-trips"
+    AssertEqLng CLng(baOut(0)), 10, "bound blob byte 0 round-trips"
+    AssertEqLng CLng(baOut(2)), 30, "bound blob byte 2 round-trips"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_BindInt64AndDate()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+    Dim dSample         As Date
+
+    If Not TestBegin("cConnection.BindInt64AndDate") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    oCnn.Execute "CREATE TABLE t(big INTEGER, d TEXT, cur REAL)"
+    dSample = DateSerial(2020, 1, 2) + TimeSerial(3, 4, 5)
+    '--- 2^53+1 is not representable in a Double: proves no double round-trip
+    oCnn.ExecCmd "INSERT INTO t VALUES(?, ?, ?)", CDec("9007199254740993"), dSample, CCur(12.34)
+    Set oRs = oCnn.GetRs("SELECT big, d, cur, typeof(big) AS tb, typeof(d) AS td FROM t")
+    AssertTrue oRs.Fields("big").Value = CDec("9007199254740993"), "integral Decimal binds via int64 (no precision loss)"
+    AssertEqStr CStr(oRs.Fields("tb").Value), "integer", "Decimal stored with INTEGER affinity"
+    AssertEqStr CStr(oRs.Fields("d").Value), "2020-01-02 03:04:05", "Date binds as ISO text"
+    AssertEqStr CStr(oRs.Fields("td").Value), "text", "Date stored as TEXT"
+    AssertTrue oRs.Fields("cur").Value = 12.34, "fractional Currency binds as double"
+    '--- bound date must equality-match a GetDateString literal
+    Set oRs = oCnn.GetRs("SELECT COUNT(*) AS n FROM t WHERE d = ?", dSample)
+    AssertEqLng CLng(oRs.Fields("n").Value), 1, "WHERE d = ? matches the text-stored date"
     TestEnd
     Exit Sub
 EH:

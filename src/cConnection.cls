@@ -363,9 +363,20 @@ Public Function NewFieldDefs() As Collection
 End Function
 
 Public Function GetRs(ByVal SQL As String, ParamArray P() As Variant) As cRecordset
+    Dim oRs             As cRecordset
+    Dim vParams()       As Variant
+
+    vParams = P
+    Set oRs = New cRecordset
+    oRs.frOpenParams Me, SQL, vParams
+    Set GetRs = oRs
 End Function
 
 Public Sub ExecCmd(ByVal SQL As String, ParamArray P() As Variant)
+    Dim vParams()       As Variant
+
+    vParams = P
+    pvExecCmd SQL, vParams
 End Sub
 
 Friend Property Get frDbHandle() As LongPtr
@@ -412,6 +423,39 @@ Private Function pvExec(sSql As String) As Long
     baSql = ToUtf8Array(sSql & vbNullChar)
     pvExec = vbsqlite3_exec(m_hDb, VarPtr(baSql(0)), 0, 0, 0)
 End Function
+
+Private Sub pvExecCmd(sSql As String, vParams() As Variant)
+    Dim baSql()         As Byte
+    Dim hStmt           As LongPtr
+    Dim lIdx            As Long
+    Dim lRc             As Long
+
+    If m_hDb = 0 Then
+        Err.Raise vbObjectError, "cConnection.ExecCmd", "Database is not open"
+    End If
+    baSql = ToUtf8Array(sSql & vbNullChar)
+    If vbsqlite3_prepare_v2(m_hDb, VarPtr(baSql(0)), -1, VarPtr(hStmt), 0) <> SQLITE_OK Then
+        Err.Raise vbObjectError, "cConnection.ExecCmd", pvLastError()
+    End If
+    On Error GoTo EH
+    For lIdx = LBound(vParams) To UBound(vParams)
+        If BindVariant(hStmt, lIdx - LBound(vParams) + 1, vParams(lIdx)) <> SQLITE_OK Then
+            Err.Raise vbObjectError, "cConnection.ExecCmd", pvLastError()
+        End If
+    Next
+    '--- run to completion (tolerate a statement that yields rows)
+    Do
+        lRc = vbsqlite3_step(hStmt)
+    Loop While lRc = SQLITE_ROW
+    If lRc <> SQLITE_DONE Then
+        Err.Raise vbObjectError, "cConnection.ExecCmd", pvLastError()
+    End If
+    Call vbsqlite3_finalize(hStmt)
+    Exit Sub
+EH:
+    Call vbsqlite3_finalize(hStmt)
+    Err.Raise Err.Number, Err.Source, Err.Description
+End Sub
 
 Private Function pvGetScalarLong(sSql As String) As Long
     Dim baSql()         As Byte

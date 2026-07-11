@@ -283,10 +283,13 @@ type. `cTestHost` is `MultiUse`.
       PASS** against winsqlite3.dll (see the TestRunner section above).
 - [x] `cRecordset` read core + `cFields`/`cField`; `cConnection.OpenRecordset`
       and `OpenSchema` wired to it (see section below).
+- [x] Parameterised `cConnection.GetRs`/`ExecCmd` over `mdGlobals.BindVariant`
+      (VB value → `bind_*`, `?` params, 1-based); `cRecordset` split into
+      `pvPrepare`/`pvMaterialize` with a `frOpenParams` bind+load path.
 - [ ] `cRecordset` write surface (AddNew/Delete/UpdateBatch/ResetChanges),
       Sort/Find, Content serialization, ADO interop, JSON export.
-- [ ] Parameterised `cConnection.GetRs`/`ExecCmd` and
-      `cCommand`/`cSelectCommand`/`cCursor` (need value→`bind_*` binding).
+- [ ] `cCommand`/`cSelectCommand`/`cCursor` (named/typed params, `Set*`,
+      reusable prepared statements) on top of `BindVariant`.
 
 ## [src/cConnection.cls](src/cConnection.cls) — connection wrapper
 
@@ -318,14 +321,24 @@ pass):
   `Currency` the API returns (raw int64 bits) via `CDec(cur) * 10000`
   (`#If Win64` uses the native `LongLong`). Verified: rowids 1, 2.
 
-`OpenRecordset`/`OpenSchema` are now implemented (they build a `cRecordset`,
-via the `Friend Property Get frDbHandle` accessor that hands the raw
-`sqlite3*` to the recordset).
+`OpenRecordset`/`OpenSchema` build a `cRecordset` via the `Friend Property Get
+frDbHandle` accessor that hands the raw `sqlite3*` to the recordset.
+`GetRs(SQL, ...params)` and `ExecCmd(SQL, ...params)` bind `?` parameters
+through `mdGlobals.BindVariant` (VB value → `bind_int`/`bind_double`/
+`bind_text` UTF-8/`bind_blob`/`bind_null`, `SQLITE_TRANSIENT` so SQLite copies
+the buffer); `GetRs` runs `cRecordset.frOpenParams` (prepare→bind→materialise),
+`ExecCmd` prepares/binds/steps to `SQLITE_DONE`, both finalising on any error.
+Two mappings that matter: **integral `Currency`/`Decimal` go through
+`bind_int64`** (a double round-trip would silently lose precision above 2^53;
+on x86 the declare types the int64 as `Currency`, so the value is scaled down
+by 10000 to land in the raw bits), and **`Date` binds as ISO text**
+(`yyyy-mm-dd hh:nn:ss`, matching `GetDateString` — as a date-serial double it
+would never equality-match text-stored dates).
 
-**Left as stubs** (need classes/binding not yet built): `GetRs`/`ExecCmd`
-(parameterised), `CreateCommand`/`CreateSelectCommand`/`CreateCursor`,
-`DataBases`/`MemDB`, `CopyDatabase`, the UDF/collation add/remove pair, and
-the ADO/`CreateTableFrom*` migration surface.
+**Left as stubs** (need classes not yet built):
+`CreateCommand`/`CreateSelectCommand`/`CreateCursor`, `DataBases`/`MemDB`,
+`CopyDatabase`, the UDF/collation add/remove pair, and the
+ADO/`CreateTableFrom*` migration surface.
 
 ## [src/cRecordset.cls](src/cRecordset.cls) — disconnected recordset
 
