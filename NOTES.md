@@ -361,8 +361,44 @@ type. `cTestHost` is `MultiUse`.
       users Implements them.
 - [ ] Content serialization (`Content`/`ContentChangesOnly`/
       `CreateTableFromRsContent`/`GetADORsFromContent`), `ToJSONUTF8`,
-      `GetRowsWithHeaders` — needs a blob-format decision (RC6-compatible
-      vs TC6-own).
+      `GetRowsWithHeaders` — **decision: RC6-compatible format** (user);
+      the blob layout has been reverse-engineered by differential probing
+      (see the Content-format section below), implementation in progress.
+
+## RC6 `Content` blob format (reverse-engineered, RC6.dll 3.42.0)
+
+Decoded by differential probing (vary one datum, diff the blobs; probe
+scripts in the session scratchpad). All numbers little-endian; strings are
+`[Long cbBytes][UTF-16 chars]` (no terminator); per-row arrays allocate
+**rows+1 elements** (one spare slot, presumably AddNew staging).
+
+- **Header** (0x00): `Long cbTotal` (= blob size incl. itself), `Long
+  RecordCount` ×3, `Long 0`, `Long CurRow` (−1 when empty), `Long
+  4*(rows+1)`, `Long ptrGarbage`, `Long RecordCount`, `Long 0`, `Long
+  ptrGarbage`, then zeros to 0x40 — the pointer slots are raw heap
+  addresses dumped from RC6's internal structures and are ignored on load
+  (verified: round-trip works across processes). One more `Long` before
+  the filename (1 when the result has an INTEGER PK column, 0 otherwise —
+  exact meaning TBC).
+- **Strings**: DB filename (`:memory:`), the SQL text.
+- **`Long FieldCount`**, then per field:
+  - strings: db (`main`), `[table]`, `[column]` (bracketed), declared
+    type, default value (`NULL` when none, else the text unquoted, e.g.
+    `x` for `DEFAULT 'x'`), collation (`BINARY`), plain field name;
+  - fixed block: `Long 0` (TBC, poss. DefinedSize), `Long NotNull`,
+    `Byte Unique`, `Byte PK`, `Byte AutoInc`, `Long Type` (1=INTEGER,
+    2=FLOAT, 3=TEXT, 4=BLOB, from the decltype), `Byte 0`, `Long W` —
+    for INTEGER columns the width class (1/2/4/8 = smallest byte width
+    holding every value in the column), else 0;
+  - `[Long cb=rows+1][per-row not-null flag bytes + spare]`;
+  - data: INTEGER `[Long cb=(rows+1)*W][values, W bytes each LE]`; REAL
+    `[Long cb=(rows+1)*8][doubles]`; TEXT/BLOB `[Long cbContent][all
+    content bytes back-to-back, text as UTF-8]` followed by an offsets
+    array `[Long cb=(rows+1)*4][Long start offsets per row, final entry
+    = cbContent]` (NULL rows have flag 0 and zero-length spans).
+- **Tail**: `Long 1`, three precomputed DML template strings
+  (`DELETE FROM [t] `, `UPDATE [t] SET `, `INSERT INTO [t] (`),
+  `Long 1`, ~0x30 zero bytes (TBC — sort/find state?).
 - [ ] Tail / possibly out of scope for v1: DDL-parsing members
       (`cColumn.OriginalConstraint`/`ConstraintName`/`CheckExpression`/
       `PrimarySortOrder`, `cTable.Constraint`), `cCommand`/
