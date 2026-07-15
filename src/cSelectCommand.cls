@@ -23,6 +23,7 @@ Option Explicit
 Private m_oConnection               As cConnection
 Private m_hStmt                     As LongPtr
 Private m_sSql                      As String
+Private m_sExecSql                  As String
 
 Public Property Get ActiveConnection() As cConnection
     Set ActiveConnection = m_oConnection
@@ -42,15 +43,15 @@ Attribute NameToIdx.VB_UserMemId = 0
 End Property
 
 Public Sub Save(CommandKey As String)
-    pvNotImpl "Save"
+    SaveCommandSql m_oConnection, "dhSelectCommands", CommandKey, m_sSql
 End Sub
 
 Public Sub ReplColumnOrTableName(ByVal ParamIdxOneBased As Long, S As String)
-    pvNotImpl "ReplColumnOrTableName"
+    pvReplParam ParamIdxOneBased, "[" & S & "]"
 End Sub
 
 Public Sub ReplTextBlock(ByVal ParamIdxOneBased As Long, S As String)
-    pvNotImpl "ReplTextBlock"
+    pvReplParam ParamIdxOneBased, S
 End Sub
 
 Public Sub SetText(ByVal ParamIdxOneBased As Long, S As String)
@@ -125,7 +126,66 @@ Private Sub pvPrepare(sSql As String)
     pvFinalize
     m_hStmt = PrepareStatement(m_oConnection, sSql)
     m_sSql = sSql
+    m_sExecSql = sSql
 End Sub
+
+Private Sub pvReplParam(ByVal lIdx As Long, sText As String)
+    Dim lPos            As Long
+
+    '--- RC6 semantics: replace the Nth bare ? in the executed SQL and
+    '--- re-prepare; the SQL property keeps returning the original template
+    lPos = pvNthParamPos(m_sExecSql, lIdx)
+    If lPos = 0 Then
+        Err.Raise 5, "cSelectCommand", "No such parameter"
+    End If
+    m_sExecSql = Left$(m_sExecSql, lPos - 1) & sText & Mid$(m_sExecSql, lPos + 1)
+    pvFinalize
+    m_hStmt = PrepareStatement(m_oConnection, m_sExecSql)
+End Sub
+
+Private Function pvNthParamPos(sSql As String, ByVal lIdx As Long) As Long
+    Dim lPos            As Long
+    Dim lCount          As Long
+    Dim sChar           As String
+
+    lPos = 1
+    Do While lPos <= Len(sSql)
+        sChar = Mid$(sSql, lPos, 1)
+        Select Case sChar
+        Case "'", """", "`"
+            lPos = InStr(lPos + 1, sSql, sChar)
+            If lPos = 0 Then
+                Exit Function
+            End If
+        Case "["
+            lPos = InStr(lPos + 1, sSql, "]")
+            If lPos = 0 Then
+                Exit Function
+            End If
+        Case "-"
+            If Mid$(sSql, lPos, 2) = "--" Then
+                lPos = InStr(lPos + 1, sSql, vbLf)
+                If lPos = 0 Then
+                    Exit Function
+                End If
+            End If
+        Case "/"
+            If Mid$(sSql, lPos, 2) = "/*" Then
+                lPos = InStr(lPos + 1, sSql, "*/") + 1
+                If lPos = 1 Then
+                    Exit Function
+                End If
+            End If
+        Case "?"
+            lCount = lCount + 1
+            If lCount = lIdx Then
+                pvNthParamPos = lPos
+                Exit Function
+            End If
+        End Select
+        lPos = lPos + 1
+    Loop
+End Function
 
 Private Sub pvFinalize()
     If m_hStmt <> 0 Then

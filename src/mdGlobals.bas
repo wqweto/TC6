@@ -197,6 +197,37 @@ Public Function QuoteString(sText As String) As String
     QuoteString = "'" & Replace(sText, "'", "''") & "'"
 End Function
 
+Public Sub SaveCommandSql(oCnn As cConnection, sTable As String, sKey As String, sSql As String)
+    Dim baSql()         As Byte
+
+    '--- RC6 saved-commands table (exact DDL); the SQL is a UTF-16 blob
+    If Not pvSavedTableExists(oCnn, sTable) Then
+        oCnn.Execute "CREATE TABLE " & sTable & "(ID Integer Primary Key,CommandKey Text Collate NoCase Unique On Conflict Replace, SQL Blob)"
+    End If
+    baSql = sSql
+    oCnn.ExecCmd "INSERT INTO " & sTable & "(CommandKey, SQL) VALUES(?, ?)", sKey, baSql
+End Sub
+
+Public Function LookupSavedSql(oCnn As cConnection, sTable As String, sKey As String) As String
+    Dim oRs             As cRecordset
+    Dim baSql()         As Byte
+
+    If pvSavedTableExists(oCnn, sTable) Then
+        Set oRs = oCnn.GetRs("SELECT SQL FROM " & sTable & " WHERE CommandKey = ?", sKey)
+        If oRs.RecordCount > 0 Then
+            baSql = oRs.Fields(0).Value
+            LookupSavedSql = baSql
+        End If
+    End If
+End Function
+
+Private Function pvSavedTableExists(oCnn As cConnection, sTable As String) As Boolean
+    Dim oRs             As cRecordset
+
+    Set oRs = oCnn.GetRs("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", sTable)
+    pvSavedTableExists = (oRs.Fields(0).Value > 0)
+End Function
+
 Public Function AdoTypeToDeclType(ByVal lAdoType As Long, Optional ByVal lCharMaxLen As Long) As String
     Const adSmallInt                        As Long = 2
     Const adInteger                         As Long = 3

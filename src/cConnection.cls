@@ -317,17 +317,22 @@ End Sub
 
 Public Function CreateCommand(SQL As String) As cCommand
     Dim oCmd            As cCommand
+    Dim sSaved          As String
 
+    '--- RC6 semantics: a saved CommandKey resolves to its stored SQL
+    sSaved = LookupSavedSql(Me, "dhWriteCommands", SQL)
     Set oCmd = New cCommand
-    oCmd.frInit Me, SQL
+    oCmd.frInit Me, IIf(Len(sSaved) > 0, sSaved, SQL)
     Set CreateCommand = oCmd
 End Function
 
 Public Function CreateSelectCommand(SQL As String) As cSelectCommand
     Dim oCmd            As cSelectCommand
+    Dim sSaved          As String
 
+    sSaved = LookupSavedSql(Me, "dhSelectCommands", SQL)
     Set oCmd = New cSelectCommand
-    oCmd.frInit Me, SQL
+    oCmd.frInit Me, IIf(Len(sSaved) > 0, sSaved, SQL)
     Set CreateSelectCommand = oCmd
 End Function
 

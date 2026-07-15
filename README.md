@@ -74,5 +74,8 @@ RC6.dll and expects it registered on the machine; it is skipped otherwise.
   False` restores `Null` (matches RC6).
 - 64-bit integers use `Variant` of `VT_I8`, `UniqueID64` values match RC6's
   local-time encoding.
-- Not (yet) implemented: `ContentChangesOnly`, JSON/ADO interop members,
-  `cDBAccess`; see the checklists in [NOTES.md](NOTES.md).
+- `Content`/`ContentChangesOnly` blobs, `ToJSONUTF8` output, event timing
+  and the ADO interop (`GetADORsFromContent`, `CreateTableFromADORs`,
+  `cConverter`) are pinned against the real RC6.dll by the test suite.
+- `cDBAccess` (RC6 thread marshalling) is intentionally left unimplemented;
+  see the checklists in [NOTES.md](NOTES.md).

@@ -11,6 +11,104 @@ Public Sub RunCommandTests()
     Test_CommandSetters
     Test_SelectCommand
     Test_Cursor
+    Test_CommandSave
+    Test_ReplParams
+End Sub
+
+Private Sub Test_CommandSave()
+    Dim oCnn            As cConnection
+    Dim oCmd            As cCommand
+    Dim oSel            As cSelectCommand
+    Dim oRs             As cRecordset
+    Dim oRc6Cnn         As Object
+    Dim oRc6Cmd         As Object
+
+    If Not TestBegin("cCommand.Save") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oCmd = oCnn.CreateCommand("INSERT INTO t(name) VALUES(?)")
+    oCmd.Save "mykey"
+    Set oRs = oCnn.GetRs("SELECT sql FROM sqlite_master WHERE name = 'dhWriteCommands'")
+    AssertEqStr CStr(oRs.Fields(0).Value), "CREATE TABLE dhWriteCommands(ID Integer Primary Key,CommandKey Text Collate NoCase Unique On Conflict Replace, SQL Blob)", "RC6-identical saved-commands DDL"
+    Set oRs = oCnn.GetRs("SELECT typeof(SQL) FROM dhWriteCommands WHERE CommandKey = 'mykey'")
+    AssertEqStr CStr(oRs.Fields(0).Value), "blob", "SQL stored as blob"
+    '--- retrieval by key, case-insensitive
+    Set oCmd = oCnn.CreateCommand("MYKEY")
+    AssertEqStr oCmd.SQL, "INSERT INTO t(name) VALUES(?)", "CreateCommand resolves the saved key"
+    oCmd.SetText 1, "saved"
+    oCmd.Execute
+    AssertEqLng CLng(oCnn.GetRs("SELECT COUNT(*) FROM t WHERE name = 'saved'").Fields(0).Value), 1, "retrieved command executes"
+    '--- overwrite on the same key keeps one row
+    Set oCmd = oCnn.CreateCommand("DELETE FROM t WHERE id < 0")
+    oCmd.Save "mykey"
+    AssertEqLng CLng(oCnn.GetRs("SELECT COUNT(*) FROM dhWriteCommands").Fields(0).Value), 1, "Unique On Conflict Replace keeps one row per key"
+    AssertEqStr oCnn.CreateCommand("mykey").SQL, "DELETE FROM t WHERE id < 0", "overwritten key resolves to the new SQL"
+    '--- select commands persist in their own table
+    Set oSel = oCnn.CreateSelectCommand("SELECT id FROM t WHERE name = ?")
+    oSel.Save "selkey"
+    Set oRs = oCnn.GetRs("SELECT COUNT(*) FROM dhSelectCommands WHERE CommandKey = 'selkey'")
+    AssertEqLng CLng(oRs.Fields(0).Value), 1, "select command saved to dhSelectCommands"
+    Set oSel = oCnn.CreateSelectCommand("selkey")
+    oSel.SetText 1, "beta"
+    AssertEqLng CLng(oSel.Execute().Fields(0).Value), 2, "retrieved select command executes"
+    '--- stored bytes match RC6's exactly
+    On Error Resume Next
+    Set oRc6Cnn = CreateObject("RC6.cConnection")
+    On Error GoTo EH
+    If Not oRc6Cnn Is Nothing Then
+        oRc6Cnn.CreateNewDB ":memory:"
+        oRc6Cnn.Execute "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT)"
+        Set oRc6Cmd = oRc6Cnn.CreateCommand("INSERT INTO t(name) VALUES(?)")
+        oRc6Cmd.Save "mykey"
+        Set oCmd = oCnn.CreateCommand("INSERT INTO t(name) VALUES(?)")
+        oCmd.Save "bytekey"
+        AssertEqStr CStr(oCnn.GetRs("SELECT quote(SQL) FROM dhWriteCommands WHERE CommandKey = 'bytekey'").Fields(0).Value), _
+            CStr(oRc6Cnn.OpenRecordset("SELECT quote(SQL) FROM dhWriteCommands WHERE CommandKey = 'mykey'").Fields(0).Value), "stored SQL bytes match RC6"
+    End If
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_ReplParams()
+    Dim oCnn            As cConnection
+    Dim oSel            As cSelectCommand
+    Dim oRs             As cRecordset
+
+    If Not TestBegin("cSelectCommand.ReplParams") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    oCnn.Execute "CREATE TABLE q([my col] INTEGER, v TEXT)"
+    oCnn.Execute "INSERT INTO q VALUES(5, 'x')"
+    '--- identifier replacement is bracket-quoted
+    Set oSel = oCnn.CreateSelectCommand("SELECT v FROM q WHERE ? > 0")
+    oSel.ReplColumnOrTableName 1, "my col"
+    AssertEqStr oSel.SQL, "SELECT v FROM q WHERE ? > 0", "SQL keeps returning the original template"
+    Set oRs = oSel.Execute()
+    AssertEqStr CStr(oRs.Fields(0).Value), "x", "spaced identifier replacement executes"
+    '--- raw text block + remaining params keep working
+    Set oSel = oCnn.CreateSelectCommand("SELECT id FROM t WHERE id > ? ORDER BY ?")
+    oSel.ReplTextBlock 2, "score DESC"
+    oSel.SetInt32 1, 0
+    Set oRs = oSel.Execute()
+    AssertEqLng CLng(oRs.Fields(0).Value), 3, "text block replacement orders descending"
+    '--- params renumber after a replacement (kept working where RC6 6.0.15
+    '--- errors out - deliberate divergence)
+    Set oSel = oCnn.CreateSelectCommand("SELECT id FROM t WHERE ? = ?")
+    oSel.ReplColumnOrTableName 1, "name"
+    oSel.SetText 1, "beta"
+    Set oRs = oSel.Execute()
+    AssertEqLng CLng(oRs.Fields(0).Value), 2, "remaining params renumber after replacement"
+    '--- a ? inside a string literal is not a parameter
+    Set oSel = oCnn.CreateSelectCommand("SELECT COUNT(*) FROM t WHERE name <> 'q?x' AND id > ?")
+    oSel.ReplTextBlock 1, "0"
+    Set oRs = oSel.Execute()
+    AssertEqLng CLng(oRs.Fields(0).Value), 3, "quoted question mark is skipped"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
 End Sub
 
 Private Function pvSeededDb() As cConnection

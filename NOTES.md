@@ -698,6 +698,24 @@ Three thin wrappers over one prepared `sqlite3_stmt*` each, created by the
 connection reference (child → parent only, no cycle) and finalizes its
 statement in `Class_Terminate`; the `SQL` Let re-prepares.
 
+- `Save CommandKey` (probed against RC6 6.0.15): persists the ORIGINAL
+  template SQL as a **UTF-16 blob** into `dhWriteCommands` (cCommand) /
+  `dhSelectCommands` (cSelectCommand), created on demand with RC6's exact
+  DDL — `(ID Integer Primary Key,CommandKey Text Collate NoCase Unique On
+  Conflict Replace, SQL Blob)`. `CreateCommand`/`CreateSelectCommand`
+  resolve a saved key (case-insensitive) to its stored SQL before
+  treating the argument as SQL.
+- `ReplColumnOrTableName`/`ReplTextBlock` (cSelectCommand): replace the
+  Nth bare `?` (string/identifier literals and comments skipped) in the
+  **executed** SQL — identifiers bracket-quoted, text blocks raw — and
+  re-prepare; the `SQL` property keeps returning the original template
+  (RC6-verified), bindings are lost, remaining `?`s renumber. Divergence:
+  RC6 6.0.15 breaks when a non-last `?` is replaced and params are bound
+  afterwards ("incomplete input" / error 438) — TC6 handles it correctly.
+- Statements can't prepare against a `?` in table position, so table
+  replacement only works where the template stays parseable — same
+  limitation as RC6 (its `SELECT ... FROM ?` create also fails).
+
 - Common `Set*` surface (1-based param index): `SetText` (UTF-8),
   `SetTextPtr` (UTF-16 ptr → `bind_text16`), `SetTextUTF8Ptr`, `SetBlob`/
   `SetBlobPtr`, `SetInt32`, `SetInt64` (Variant carrier → `bind_int64`),

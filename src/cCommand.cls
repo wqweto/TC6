@@ -45,7 +45,7 @@ Attribute NameToIdx.VB_UserMemId = 0
 End Property
 
 Public Sub Save(CommandKey As String)
-    pvNotImpl "Save"
+    SaveCommandSql m_oConnection, "dhWriteCommands", CommandKey, m_sSql
 End Sub
 
 Public Sub SetText(ByVal ParamIdxOneBased As Long, S As String)
