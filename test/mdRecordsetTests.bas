@@ -4,6 +4,8 @@ Attribute VB_Name = "mdRecordsetTests"
 '=========================================================================
 Option Explicit
 
+Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
+
 Public Sub RunRecordsetTests()
     Test_BasicSelect
     Test_Navigation
@@ -28,6 +30,20 @@ Public Sub RunRecordsetTests()
     Test_ContentRoundTrip
     Test_CreateTableFromRsContent
     Test_ContentRC6Compat
+    Test_ContentChangesOnly
+    Test_ContentChangesOnlyRC6
+    Test_ChangesOnlyUpdatesMultiRows
+    Test_ChangesOnlyUpdateToNull
+    Test_ChangesOnlyUpdateBlob
+    Test_ChangesOnlyUpdateInt64
+    Test_ChangesOnlyUpdatePkValue
+    Test_ChangesOnlyDeleteMultiple
+    Test_ChangesOnlyInsertMultiple
+    Test_ChangesOnlyInsertAutoPk
+    Test_ChangesOnlyNoChanges
+    Test_ChangesOnlyTextPkOps
+    Test_ChangesOnlyNotUpdatable
+    Test_ChangesOnlyRC6Compat
 End Sub
 
 Private Function pvSeededDb() As cConnection
@@ -751,6 +767,766 @@ Private Function pvArrLen(baBuf() As Byte) As Long
     pvArrLen = UBound(baBuf) - LBound(baBuf) + 1
 QH:
 End Function
+
+Private Sub Test_ContentChangesOnly()
+    Dim oCnn            As cConnection
+    Dim oCnn2           As cConnection
+    Dim oRs             As cRecordset
+    Dim oRs2            As cRecordset
+    Dim baChanges()     As Byte
+
+    If Not TestBegin("cRecordset.ContentChangesOnly") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    oRs.Fields("name").Value = "ALPHA2"
+    oRs.MoveNext
+    oRs.Fields("score").Value = 9.25
+    oRs.MoveLast
+    oRs.Delete
+    oRs.AddNew
+    oRs.Fields("id").Value = 9
+    oRs.Fields("name").Value = "inserted"
+    oRs.Fields("score").Value = 4.5
+    baChanges = oRs.ContentChangesOnly
+    AssertTrue UBound(baChanges) > 100, "changes blob produced"
+    '--- apply to a second connection holding identical data
+    Set oCnn2 = pvSeededDb()
+    Set oRs2 = oCnn2.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    oRs2.Content = baChanges
+    AssertEqLng oRs2.RecordCount, 0, "changes blob loads with no visible rows"
+    AssertTrue oRs2.ContainsChanges, "pending changes present after load"
+    AssertTrue Not oRs2.Updatable, "changes-only recordset is not updatable"
+    oRs2.UpdateBatch
+    AssertTrue Not oRs2.ContainsChanges, "changes cleared after apply"
+    Set oRs2 = oCnn2.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    AssertEqLng oRs2.RecordCount, 3, "row count after modify+delete+insert"
+    AssertEqStr CStr(oRs2.Fields("name").Value), "ALPHA2", "modified text applied"
+    oRs2.MoveNext
+    AssertTrue oRs2.Fields("score").Value = 9.25, "modified real applied"
+    oRs2.MoveNext
+    AssertEqLng CLng(oRs2.Fields("id").Value), 9, "pending insert applied"
+    AssertEqStr CStr(oRs2.Fields("name").Value), "inserted", "inserted text applied"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub pvApplyChanges(oCnn As cConnection, baChanges() As Byte)
+    Dim oRs             As cRecordset
+    Dim baTemp()        As Byte
+
+    '--- VB6 bug: assigning a ByRef array parameter straight to a Property
+    '--- Let crashes at runtime - copy to a local first
+    baTemp = baChanges
+    Set oRs = New cRecordset
+    Set oRs.ActiveConnection = oCnn
+    oRs.Content = baTemp
+    oRs.UpdateBatch
+End Sub
+
+Private Sub Test_ChangesOnlyUpdatesMultiRows()
+    Dim oCnn            As cConnection
+    Dim oCnn2           As cConnection
+    Dim oRs             As cRecordset
+    Dim baChanges()     As Byte
+
+    If Not TestBegin("cRecordset.ChangesOnlyUpdatesMultiRows") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    oRs.Fields("name").Value = "N0"
+    oRs.MoveNext
+    oRs.Fields("name").Value = "N1"
+    oRs.MoveNext
+    oRs.Fields("score").Value = 7.5
+    baChanges = oRs.ContentChangesOnly
+    Set oCnn2 = pvSeededDb()
+    pvApplyChanges oCnn2, baChanges
+    Set oRs = oCnn2.OpenRecordset("SELECT name, score FROM t ORDER BY id")
+    AssertEqStr CStr(oRs.Fields("name").Value), "N0", "row0 name updated"
+    oRs.MoveNext
+    AssertEqStr CStr(oRs.Fields("name").Value), "N1", "row1 name updated"
+    oRs.MoveNext
+    AssertEqStr CStr(oRs.Fields("name").Value), "gamma", "row2 name untouched"
+    AssertTrue oRs.Fields("score").Value = 7.5, "row2 score updated"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_ChangesOnlyUpdateToNull()
+    Dim oCnn            As cConnection
+    Dim oCnn2           As cConnection
+    Dim oRs             As cRecordset
+    Dim baChanges()     As Byte
+
+    If Not TestBegin("cRecordset.ChangesOnlyUpdateToNull") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    oRs.Fields("name").Value = Null
+    baChanges = oRs.ContentChangesOnly
+    Set oCnn2 = pvSeededDb()
+    pvApplyChanges oCnn2, baChanges
+    Set oRs = oCnn2.OpenRecordset("SELECT COUNT(*) FROM t WHERE name IS NULL AND id = 1")
+    AssertEqLng CLng(oRs.Fields(0).Value), 1, "NULL update applied in the DB"
+    Set oRs = oCnn2.OpenRecordset("SELECT name FROM t WHERE id = 1")
+    AssertTrue IsEmpty(oRs.Fields(0).Value), "NULL surfaces as Empty after apply"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_ChangesOnlyUpdateBlob()
+    Dim oCnn            As cConnection
+    Dim oCnn2           As cConnection
+    Dim oRs             As cRecordset
+    Dim baChanges()     As Byte
+    Dim baBlob()        As Byte
+
+    If Not TestBegin("cRecordset.ChangesOnlyUpdateBlob") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    oCnn.Execute "CREATE TABLE b(id INTEGER PRIMARY KEY, d BLOB)"
+    oCnn.Execute "INSERT INTO b VALUES(1, X'AABB')"
+    Set oRs = oCnn.OpenRecordset("SELECT id, d FROM b")
+    ReDim baBlob(0 To 2) As Byte
+    baBlob(0) = 1
+    baBlob(1) = 0
+    baBlob(2) = 255
+    oRs.Fields("d").Value = baBlob
+    baChanges = oRs.ContentChangesOnly
+    Set oCnn2 = New cConnection
+    oCnn2.CreateNewDB ":memory:"
+    oCnn2.Execute "CREATE TABLE b(id INTEGER PRIMARY KEY, d BLOB)"
+    oCnn2.Execute "INSERT INTO b VALUES(1, X'AABB')"
+    pvApplyChanges oCnn2, baChanges
+    Set oRs = oCnn2.OpenRecordset("SELECT d FROM b WHERE id = 1")
+    baBlob = oRs.Fields(0).Value
+    AssertEqLng UBound(baBlob) - LBound(baBlob) + 1, 3, "blob length updated"
+    AssertEqLng CLng(baBlob(0)), 1, "blob byte 0"
+    AssertEqLng CLng(baBlob(1)), 0, "blob byte 1 (embedded zero)"
+    AssertEqLng CLng(baBlob(2)), 255, "blob byte 2"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_ChangesOnlyUpdateInt64()
+    Dim oCnn            As cConnection
+    Dim oCnn2           As cConnection
+    Dim oRs             As cRecordset
+    Dim baChanges()     As Byte
+
+    If Not TestBegin("cRecordset.ChangesOnlyUpdateInt64") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    oCnn.Execute "CREATE TABLE w(id INTEGER PRIMARY KEY, v INTEGER)"
+    oCnn.Execute "INSERT INTO w VALUES(1, 10)"
+    Set oRs = oCnn.OpenRecordset("SELECT id, v FROM w")
+    oRs.Fields("v").Value = CDec("9007199254740993")
+    baChanges = oRs.ContentChangesOnly
+    Set oCnn2 = New cConnection
+    oCnn2.CreateNewDB ":memory:"
+    oCnn2.Execute "CREATE TABLE w(id INTEGER PRIMARY KEY, v INTEGER)"
+    oCnn2.Execute "INSERT INTO w VALUES(1, 10)"
+    pvApplyChanges oCnn2, baChanges
+    Set oRs = oCnn2.OpenRecordset("SELECT v FROM w WHERE id = 1")
+    AssertTrue CDec(oRs.Fields(0).Value) = CDec("9007199254740993"), "int64 value survives full precision"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_ChangesOnlyUpdatePkValue()
+    Dim oCnn            As cConnection
+    Dim oCnn2           As cConnection
+    Dim oRs             As cRecordset
+    Dim baChanges()     As Byte
+
+    If Not TestBegin("cRecordset.ChangesOnlyUpdatePkValue") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    oRs.MoveNext
+    oRs.Fields("id").Value = 7
+    baChanges = oRs.ContentChangesOnly
+    Set oCnn2 = pvSeededDb()
+    pvApplyChanges oCnn2, baChanges
+    Set oRs = oCnn2.OpenRecordset("SELECT COUNT(*) FROM t WHERE id = 2")
+    AssertEqLng CLng(oRs.Fields(0).Value), 0, "WHERE used the original pk value"
+    Set oRs = oCnn2.OpenRecordset("SELECT name FROM t WHERE id = 7")
+    AssertEqStr CStr(oRs.Fields(0).Value), "beta", "row re-keyed to the new pk"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_ChangesOnlyDeleteMultiple()
+    Dim oCnn            As cConnection
+    Dim oCnn2           As cConnection
+    Dim oRs             As cRecordset
+    Dim baChanges()     As Byte
+
+    If Not TestBegin("cRecordset.ChangesOnlyDeleteMultiple") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    oRs.Delete
+    oRs.Delete
+    baChanges = oRs.ContentChangesOnly
+    Set oCnn2 = pvSeededDb()
+    pvApplyChanges oCnn2, baChanges
+    Set oRs = oCnn2.OpenRecordset("SELECT id, name FROM t")
+    AssertEqLng oRs.RecordCount, 1, "two deletes applied"
+    AssertEqStr CStr(oRs.Fields("name").Value), "gamma", "surviving row"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_ChangesOnlyInsertMultiple()
+    Dim oCnn            As cConnection
+    Dim oCnn2           As cConnection
+    Dim oRs             As cRecordset
+    Dim baChanges()     As Byte
+
+    If Not TestBegin("cRecordset.ChangesOnlyInsertMultiple") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    oRs.AddNew
+    oRs.Fields("id").Value = 9
+    oRs.Fields("name").Value = "nine"
+    oRs.Fields("score").Value = 9.5
+    oRs.AddNew
+    oRs.Fields("id").Value = 10
+    oRs.Fields("score").Value = 10.5
+    baChanges = oRs.ContentChangesOnly
+    Set oCnn2 = pvSeededDb()
+    pvApplyChanges oCnn2, baChanges
+    Set oRs = oCnn2.OpenRecordset("SELECT COUNT(*) FROM t")
+    AssertEqLng CLng(oRs.Fields(0).Value), 5, "both inserts applied"
+    Set oRs = oCnn2.OpenRecordset("SELECT name, score FROM t WHERE id = 10")
+    AssertTrue IsEmpty(oRs.Fields("name").Value), "unassigned cell inserted as NULL"
+    AssertTrue oRs.Fields("score").Value = 10.5, "second insert score"
+    Set oRs = oCnn2.OpenRecordset("SELECT name FROM t WHERE id = 9")
+    AssertEqStr CStr(oRs.Fields(0).Value), "nine", "first insert name"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_ChangesOnlyInsertAutoPk()
+    Dim oCnn            As cConnection
+    Dim oCnn2           As cConnection
+    Dim oRs             As cRecordset
+    Dim baChanges()     As Byte
+
+    If Not TestBegin("cRecordset.ChangesOnlyInsertAutoPk") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    oRs.AddNew
+    oRs.Fields("name").Value = "auto"
+    baChanges = oRs.ContentChangesOnly
+    Set oCnn2 = pvSeededDb()
+    pvApplyChanges oCnn2, baChanges
+    Set oRs = oCnn2.OpenRecordset("SELECT id FROM t WHERE name = 'auto'")
+    AssertEqLng oRs.RecordCount, 1, "auto-pk insert applied"
+    AssertEqLng CLng(oRs.Fields(0).Value), 4, "INTEGER PK auto-assigned on NULL insert"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_ChangesOnlyNoChanges()
+    Dim oCnn            As cConnection
+    Dim oCnn2           As cConnection
+    Dim oRs             As cRecordset
+    Dim oRs2            As cRecordset
+    Dim baChanges()     As Byte
+
+    If Not TestBegin("cRecordset.ChangesOnlyNoChanges") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    baChanges = oRs.ContentChangesOnly
+    AssertTrue UBound(baChanges) > 100, "clean recordset still yields a blob"
+    Set oCnn2 = pvSeededDb()
+    Set oRs2 = New cRecordset
+    Set oRs2.ActiveConnection = oCnn2
+    oRs2.Content = baChanges
+    AssertEqLng oRs2.RecordCount, 0, "no visible rows"
+    AssertTrue Not oRs2.ContainsChanges, "no pending changes"
+    oRs2.UpdateBatch
+    Set oRs = oCnn2.OpenRecordset("SELECT COUNT(*) FROM t")
+    AssertEqLng CLng(oRs.Fields(0).Value), 3, "no-op apply leaves the table intact"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_ChangesOnlyTextPkOps()
+    Dim oCnn            As cConnection
+    Dim oCnn2           As cConnection
+    Dim oRs             As cRecordset
+    Dim baChanges()     As Byte
+
+    If Not TestBegin("cRecordset.ChangesOnlyTextPkOps") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    oCnn.Execute "CREATE TABLE p(k TEXT PRIMARY KEY, v TEXT)"
+    oCnn.Execute "INSERT INTO p VALUES('k1', 'a'), ('k2', 'b'), ('k3', 'c')"
+    Set oRs = oCnn.OpenRecordset("SELECT k, v FROM p ORDER BY k")
+    oRs.Fields("v").Value = "A2"
+    oRs.MoveLast
+    oRs.Delete
+    baChanges = oRs.ContentChangesOnly
+    Set oCnn2 = New cConnection
+    oCnn2.CreateNewDB ":memory:"
+    oCnn2.Execute "CREATE TABLE p(k TEXT PRIMARY KEY, v TEXT)"
+    oCnn2.Execute "INSERT INTO p VALUES('k1', 'a'), ('k2', 'b'), ('k3', 'c')"
+    pvApplyChanges oCnn2, baChanges
+    Set oRs = oCnn2.OpenRecordset("SELECT COUNT(*) FROM p")
+    AssertEqLng CLng(oRs.Fields(0).Value), 2, "text-pk delete applied"
+    Set oRs = oCnn2.OpenRecordset("SELECT v FROM p WHERE k = 'k1'")
+    AssertEqStr CStr(oRs.Fields(0).Value), "A2", "text-pk update applied"
+    Set oRs = oCnn2.OpenRecordset("SELECT COUNT(*) FROM p WHERE k = 'k3'")
+    AssertEqLng CLng(oRs.Fields(0).Value), 0, "deleted key gone"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_ChangesOnlyNotUpdatable()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+    Dim baChanges()     As Byte
+    Dim lErr            As Long
+
+    If Not TestBegin("cRecordset.ChangesOnlyNotUpdatable") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id + 1 AS e FROM t")
+    lErr = 0
+    On Error Resume Next
+    baChanges = oRs.ContentChangesOnly
+    lErr = Err.Number
+    On Error GoTo EH
+    AssertEqLng lErr, vbObjectError, "expression recordset raises on ContentChangesOnly"
+    Set oRs = oCnn.OpenRecordset("SELECT name FROM t")
+    lErr = 0
+    On Error Resume Next
+    baChanges = oRs.ContentChangesOnly
+    lErr = Err.Number
+    On Error GoTo EH
+    AssertEqLng lErr, vbObjectError, "recordset without its pk raises on ContentChangesOnly"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_ChangesOnlyRC6Compat()
+    Dim oProbe          As Object
+
+    If Not TestBegin("cRecordset.ChangesOnlyRC6Compat") Then Exit Sub
+    On Error Resume Next
+    Set oProbe = CreateObject("RC6.cConnection")
+    If oProbe Is Nothing Then
+        TestSkipCurrent "RC6.dll not registered"
+        Exit Sub
+    End If
+    On Error GoTo EH
+    pvChangesCompatCase "upd_multi", "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL)", _
+        "INSERT INTO t VALUES(1, 'alpha', 1.5), (2, 'beta', 2.5), (3, 'gamma', 3.5)", "SELECT id, name, score FROM t ORDER BY id", _
+        Array(Array("upd", 1, "name", "N0"), Array("upd", 2, "name", "N1"), Array("upd", 3, "score", 7.5))
+    pvChangesCompatCase "upd_null", "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL)", _
+        "INSERT INTO t VALUES(1, 'alpha', 1.5), (2, 'beta', 2.5)", "SELECT id, name, score FROM t ORDER BY id", _
+        Array(Array("upd", 1, "name", Null))
+    pvChangesCompatCase "upd_blob", "CREATE TABLE b(id INTEGER PRIMARY KEY, d BLOB)", _
+        "INSERT INTO b VALUES(1, X'AABB')", "SELECT id, d FROM b", _
+        Array(Array("upd", 1, "d", pvTestBlob()))
+    pvChangesCompatCase "upd_int64", "CREATE TABLE w(id INTEGER PRIMARY KEY, v INTEGER)", _
+        "INSERT INTO w VALUES(1, 10)", "SELECT id, v FROM w", _
+        Array(Array("upd", 1, "v", CDec("9007199254740993")))
+    pvChangesCompatCase "upd_pk", "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL)", _
+        "INSERT INTO t VALUES(1, 'alpha', 1.5), (2, 'beta', 2.5), (3, 'gamma', 3.5)", "SELECT id, name, score FROM t ORDER BY id", _
+        Array(Array("upd", 2, "id", 7&))
+    pvChangesCompatCase "del_multi", "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL)", _
+        "INSERT INTO t VALUES(1, 'alpha', 1.5), (2, 'beta', 2.5), (3, 'gamma', 3.5)", "SELECT id, name, score FROM t ORDER BY id", _
+        Array(Array("del", 1), Array("del", 1))
+    pvChangesCompatCase "ins_multi", "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL)", _
+        "INSERT INTO t VALUES(1, 'alpha', 1.5), (2, 'beta', 2.5), (3, 'gamma', 3.5)", "SELECT id, name, score FROM t ORDER BY id", _
+        Array(Array("ins", Array("id", 9&, "name", "nine", "score", 9.5)), Array("ins", Array("id", 10&, "score", 10.5)))
+    pvChangesCompatCase "ins_autopk", "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL)", _
+        "INSERT INTO t VALUES(1, 'alpha', 1.5), (2, 'beta', 2.5), (3, 'gamma', 3.5)", "SELECT id, name, score FROM t ORDER BY id", _
+        Array(Array("ins", Array("name", "auto")))
+    pvChangesCompatCase "mixed", "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL)", _
+        "INSERT INTO t VALUES(1, 'alpha', 1.5), (2, 'beta', 2.5), (3, 'gamma', 3.5)", "SELECT id, name, score FROM t ORDER BY id", _
+        Array(Array("upd", 1, "name", "X"), Array("del", 3), Array("ins", Array("id", 9&, "name", "x", "score", 9.5)))
+    pvChangesCompatCase "textpk", "CREATE TABLE p(k TEXT PRIMARY KEY, v TEXT)", _
+        "INSERT INTO p VALUES('k1', 'a'), ('k2', 'b'), ('k3', 'c')", "SELECT k, v FROM p ORDER BY k", _
+        Array(Array("upd", 1, "v", "A2"), Array("del", 3))
+    pvChangesCompatCase "sort_mod", "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL)", _
+        "INSERT INTO t VALUES(1, 'alpha', 1.5), (2, 'beta', 2.5), (3, 'gamma', 3.5)", "SELECT id, name, score FROM t ORDER BY id", _
+        Array(Array("sort", "name DESC"), Array("upd", 1, "score", 6.5))
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Function pvTestBlob() As Byte()
+    Dim baBlob()        As Byte
+
+    ReDim baBlob(0 To 2) As Byte
+    baBlob(0) = 1
+    baBlob(1) = 0
+    baBlob(2) = 255
+    pvTestBlob = baBlob
+End Function
+
+Private Sub pvApplyOps(oRs As Object, vOps As Variant)
+    Dim vOp             As Variant
+    Dim vPairs          As Variant
+    Dim lIdx            As Long
+
+    For Each vOp In vOps
+        Select Case CStr(vOp(0))
+        Case "upd"
+            oRs.AbsolutePosition = vOp(1)
+            oRs.Fields(CStr(vOp(2))).Value = vOp(3)
+        Case "del"
+            oRs.AbsolutePosition = vOp(1)
+            oRs.Delete
+        Case "ins"
+            oRs.AddNew
+            vPairs = vOp(1)
+            For lIdx = 0 To UBound(vPairs) Step 2
+                oRs.Fields(CStr(vPairs(lIdx))).Value = vPairs(lIdx + 1)
+            Next
+        Case "sort"
+            oRs.Sort = CStr(vOp(1))
+        End Select
+    Next
+End Sub
+
+Private Sub pvChangesCompatCase(sCase As String, sDdl As String, sIns As String, sSel As String, vOps As Variant)
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+    Dim oRc6Cnn         As Object
+    Dim oRc6Rs          As Object
+    Dim baTc6()         As Byte
+    Dim baRc6()         As Byte
+    Dim sReason         As String
+    Dim oCnn2           As cConnection
+    Dim oRc6Cnn2        As Object
+    Dim oRs2            As cRecordset
+    Dim lRow            As Long
+    Dim lCol            As Long
+    Dim bSame           As Boolean
+
+    '--- identical data + identical pending ops in both engines
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    oCnn.Execute sDdl
+    oCnn.Execute sIns
+    Set oRs = oCnn.OpenRecordset(sSel)
+    pvApplyOps oRs, vOps
+    baTc6 = oRs.ContentChangesOnly
+    Set oRc6Cnn = CreateObject("RC6.cConnection")
+    oRc6Cnn.CreateNewDB ":memory:"
+    oRc6Cnn.Execute sDdl
+    oRc6Cnn.Execute sIns
+    Set oRc6Rs = oRc6Cnn.OpenRecordset(sSel)
+    pvApplyOps oRc6Rs, vOps
+    baRc6 = oRc6Rs.ContentChangesOnly
+    '--- binary-compatible outside pointer/junk fields
+    sReason = pvChangesBlobsDiff(baTc6, baRc6)
+    AssertTrue Len(sReason) = 0, sCase & ": changes blob binary-compatible with RC6" & IIf(Len(sReason) > 0, " (" & sReason & ")", vbNullString)
+    '--- cross-apply: RC6 applies the TC6 blob, TC6 applies the RC6 blob and
+    '--- both tables end up cell-for-cell identical
+    Set oRc6Cnn2 = CreateObject("RC6.cConnection")
+    oRc6Cnn2.CreateNewDB ":memory:"
+    oRc6Cnn2.Execute sDdl
+    oRc6Cnn2.Execute sIns
+    Set oRc6Rs = oRc6Cnn2.OpenRecordset(sSel)
+    oRc6Rs.Content = baTc6
+    oRc6Rs.UpdateBatch
+    Set oCnn2 = New cConnection
+    oCnn2.CreateNewDB ":memory:"
+    oCnn2.Execute sDdl
+    oCnn2.Execute sIns
+    pvApplyChanges oCnn2, baRc6
+    Set oRs2 = oCnn2.OpenRecordset(sSel)
+    Set oRc6Rs = oRc6Cnn2.OpenRecordset(sSel)
+    bSame = (oRs2.RecordCount = CLng(oRc6Rs.RecordCount) And CLng(oRs2.Fields.Count) = CLng(oRc6Rs.Fields.Count))
+    If bSame Then
+        For lRow = 0 To oRs2.RecordCount - 1
+            For lCol = 0 To oRs2.Fields.Count - 1
+                If Not pvCellsEqual(oRs2.ValueMatrix(lRow, lCol), oRc6Rs.ValueMatrix(lRow, lCol)) Then
+                    bSame = False
+                End If
+            Next
+        Next
+    End If
+    AssertTrue bSame, sCase & ": cross-applied tables match cell-for-cell"
+End Sub
+
+Private Function pvBLong(baBuf() As Byte, lPos As Long) As Long
+    Call CopyMemory(pvBLong, baBuf(lPos), 4)
+    lPos = lPos + 4
+End Function
+
+Private Sub pvBSkipStr(baBuf() As Byte, lPos As Long)
+    Dim lSize           As Long
+
+    lSize = pvBLong(baBuf, lPos)
+    lPos = lPos + lSize
+End Sub
+
+Private Function pvChangesBlobsDiff(baA() As Byte, baB() As Byte) As String
+    Dim lPos            As Long
+    Dim lIdx            As Long
+    Dim lJdx            As Long
+    Dim lFields         As Long
+    Dim lTables         As Long
+    Dim lCount          As Long
+    Dim lCells          As Long
+    Dim aSlot()         As Long
+    Dim aVtA()          As Long
+    Dim aLoA()          As Long
+    Dim lStream         As Long
+    Dim lRowsC          As Long
+    Dim lTmp            As Long
+
+    If UBound(baA) <> UBound(baB) Then
+        pvChangesBlobsDiff = "size " & (UBound(baA) + 1) & " vs " & (UBound(baB) + 1)
+        Exit Function
+    End If
+    '--- walk blob A to find the cells offset; the whole head is
+    '--- deterministic so it must be byte-identical
+    lPos = 4
+    pvBLong baA, lPos
+    pvBSkipStr baA, lPos
+    pvBSkipStr baA, lPos
+    lFields = pvBLong(baA, lPos)
+    For lIdx = 1 To lFields
+        For lJdx = 1 To 7
+            pvBSkipStr baA, lPos
+        Next
+        lPos = lPos + 20
+    Next
+    lTables = pvBLong(baA, lPos)
+    For lIdx = 1 To lTables
+        pvBSkipStr baA, lPos
+        pvBSkipStr baA, lPos
+        pvBSkipStr baA, lPos
+        lCount = pvBLong(baA, lPos)
+        lPos = lPos + 4 * lCount
+    Next
+    lTmp = pvChgCmpRange(baA, baB, 4, lPos - 4)
+    If lTmp >= 0 Then
+        pvChangesBlobsDiff = "head diff at &H" & Hex$(lTmp)
+        Exit Function
+    End If
+    '--- cells: count + slots exact, records vt exact, unions masked by kind
+    lCells = pvBLong(baA, lPos)
+    lTmp = pvChgCmpRange(baA, baB, lPos - 4, 4 + 4 * lCells)
+    If lTmp >= 0 Then
+        pvChangesBlobsDiff = "cell slots diff at &H" & Hex$(lTmp)
+        Exit Function
+    End If
+    If lCells > 0 Then
+        ReDim aSlot(0 To lCells - 1) As Long
+        ReDim aVtA(0 To lCells - 1) As Long
+        ReDim aLoA(0 To lCells - 1) As Long
+    End If
+    For lIdx = 0 To lCells - 1
+        aSlot(lIdx) = pvBLong(baA, lPos)
+    Next
+    lPos = lPos + 16
+    For lIdx = 0 To lCells - 1
+        aVtA(lIdx) = pvBLong(baA, lPos)
+        If pvChgCmpRange(baA, baB, lPos - 4, 4) >= 0 Then
+            pvChangesBlobsDiff = "cell " & lIdx & " vt " & aVtA(lIdx) & " vs &H" & Hex$(pvBLongAt(baB, lPos - 4))
+            Exit Function
+        End If
+        pvBLong baA, lPos
+        aLoA(lIdx) = pvBLongAt(baA, lPos)
+        lTmp = -1
+        If aSlot(lIdx) < 0 Then
+            lTmp = pvChgCmpRange(baA, baB, lPos, 4)
+        Else
+            Select Case aVtA(lIdx)
+            Case 0, 1
+            Case 2
+                lTmp = pvChgCmpRange(baA, baB, lPos, 2)
+            Case 3
+                lTmp = pvChgCmpRange(baA, baB, lPos, 4)
+            Case Else
+                lTmp = pvChgCmpRange(baA, baB, lPos, 8)
+            End Select
+        End If
+        If lTmp >= 0 Then
+            pvChangesBlobsDiff = "cell " & lIdx & " union diff at &H" & Hex$(lTmp)
+            Exit Function
+        End If
+        lPos = lPos + 8
+    Next
+    '--- shared text stream
+    lStream = 0
+    For lIdx = 0 To lCells - 1
+        If aSlot(lIdx) < 0 Then
+            lStream = lStream + Abs(aLoA(lIdx))
+        End If
+    Next
+    lTmp = pvChgCmpRange(baA, baB, lPos, lStream + 1)
+    If lTmp >= 0 Then
+        pvChangesBlobsDiff = "text stream diff at &H" & Hex$(lTmp)
+        Exit Function
+    End If
+    lPos = lPos + lStream + 1
+    '--- WHERE rows: labels exact, pk records masked like cells
+    lRowsC = pvBLong(baA, lPos)
+    lTmp = pvChgCmpRange(baA, baB, lPos - 4, 4 + 1 + 4 * lRowsC)
+    If lTmp >= 0 Then
+        pvChangesBlobsDiff = "row labels diff at &H" & Hex$(lTmp)
+        Exit Function
+    End If
+    lPos = lPos + 1 + 4 * lRowsC + 15
+    For lIdx = 0 To lRowsC - 1
+        If pvChgCmpRange(baA, baB, lPos, 4) >= 0 Then
+            pvChangesBlobsDiff = "pk " & lIdx & " vt diff"
+            Exit Function
+        End If
+        lCount = pvBLongAt(baA, lPos)
+        lTmp = -1
+        Select Case lCount
+        Case 5, 14, 20
+            lTmp = pvChgCmpRange(baA, baB, lPos + 8, 8)
+        Case Else
+            lTmp = pvChgCmpRange(baA, baB, lPos + 8, 4)
+        End Select
+        If lTmp >= 0 Then
+            pvChangesBlobsDiff = "pk " & lIdx & " value diff at &H" & Hex$(lTmp)
+            Exit Function
+        End If
+        lPos = lPos + 16
+    Next
+    '--- pk text stream + trailing byte + padding are deterministic
+    lTmp = pvChgCmpRange(baA, baB, lPos, UBound(baA) + 1 - lPos)
+    If lTmp >= 0 Then
+        pvChangesBlobsDiff = "tail diff at &H" & Hex$(lTmp)
+    End If
+End Function
+
+Private Function pvBLongAt(baBuf() As Byte, ByVal lPos As Long) As Long
+    Call CopyMemory(pvBLongAt, baBuf(lPos), 4)
+End Function
+
+Private Function pvChgCmpRange(baA() As Byte, baB() As Byte, ByVal lFrom As Long, ByVal lLen As Long) As Long
+    Dim lIdx            As Long
+
+    pvChgCmpRange = -1
+    For lIdx = lFrom To lFrom + lLen - 1
+        If baA(lIdx) <> baB(lIdx) Then
+            pvChgCmpRange = lIdx
+            Exit Function
+        End If
+    Next
+End Function
+
+Private Sub Test_ContentChangesOnlyRC6()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+    Dim oRc6Cnn         As Object
+    Dim oRc6Rs          As Object
+    Dim baChanges()     As Byte
+
+    If Not TestBegin("cRecordset.ContentChangesOnlyRC6") Then Exit Sub
+    On Error Resume Next
+    Set oRc6Cnn = CreateObject("RC6.cConnection")
+    If oRc6Cnn Is Nothing Then
+        TestSkipCurrent "RC6.dll not registered"
+        Exit Sub
+    End If
+    On Error GoTo EH
+    '--- RC6 applies a TC6 changes blob (modify + delete + insert)
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    oRs.Fields("name").Value = "ALPHA2"
+    oRs.MoveLast
+    oRs.Delete
+    oRs.AddNew
+    oRs.Fields("id").Value = 9
+    oRs.Fields("name").Value = "ins"
+    oRs.Fields("score").Value = 4.5
+    baChanges = oRs.ContentChangesOnly
+    oRc6Cnn.CreateNewDB ":memory:"
+    oRc6Cnn.Execute "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL)"
+    oRc6Cnn.Execute "INSERT INTO t VALUES(1, 'alpha', 1.5), (2, 'beta', 2.5), (3, 'gamma', 3.5)"
+    Set oRc6Rs = oRc6Cnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    oRc6Rs.Content = baChanges
+    oRc6Rs.UpdateBatch
+    Set oRc6Rs = oRc6Cnn.OpenRecordset("SELECT COUNT(*), SUM(id) FROM t")
+    AssertEqLng CLng(oRc6Rs.Fields(0).Value), 3, "RC6 applied: row count"
+    AssertEqLng CLng(oRc6Rs.Fields(1).Value), 12, "RC6 applied: delete + insert (ids 1+2+9)"
+    Set oRc6Rs = oRc6Cnn.OpenRecordset("SELECT name FROM t WHERE id = 1")
+    AssertEqStr CStr(oRc6Rs.Fields(0).Value), "ALPHA2", "RC6 applied: modified text"
+    '--- TC6 applies an RC6 changes blob
+    Set oRc6Rs = oRc6Cnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    oRc6Rs.Fields("name").Value = "RCMOD"
+    oRc6Rs.MoveLast
+    oRc6Rs.Delete
+    baChanges = oRc6Rs.ContentChangesOnly
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    oCnn.Execute "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL)"
+    oCnn.Execute "INSERT INTO t VALUES(1, 'ALPHA2', 1.5), (2, 'beta', 2.5), (9, 'ins', 4.5)"
+    Set oRs = oCnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    oRs.Content = baChanges
+    AssertTrue oRs.ContainsChanges, "TC6 loads RC6 changes blob with pending changes"
+    oRs.UpdateBatch
+    Set oRs = oCnn.OpenRecordset("SELECT id, name, score FROM t ORDER BY id")
+    AssertEqLng oRs.RecordCount, 2, "TC6 applied: RC6 delete"
+    AssertEqStr CStr(oRs.Fields("name").Value), "RCMOD", "TC6 applied: RC6 modified text"
+    '--- text pk labels survive the RC6 loader validation
+    oCnn.Execute "CREATE TABLE p(k TEXT PRIMARY KEY, v TEXT)"
+    oCnn.Execute "INSERT INTO p VALUES('k1', 'a'), ('k2', 'b')"
+    Set oRs = oCnn.OpenRecordset("SELECT k, v FROM p ORDER BY k")
+    oRs.MoveNext
+    oRs.Fields("v").Value = "B2"
+    baChanges = oRs.ContentChangesOnly
+    oRc6Cnn.Execute "CREATE TABLE p(k TEXT PRIMARY KEY, v TEXT)"
+    oRc6Cnn.Execute "INSERT INTO p VALUES('k1', 'a'), ('k2', 'b')"
+    Set oRc6Rs = oRc6Cnn.OpenRecordset("SELECT k, v FROM p ORDER BY k")
+    oRc6Rs.Content = baChanges
+    oRc6Rs.UpdateBatch
+    Set oRc6Rs = oRc6Cnn.OpenRecordset("SELECT v FROM p WHERE k = 'k2'")
+    AssertEqStr CStr(oRc6Rs.Fields(0).Value), "B2", "RC6 applied: TC6 text-pk modify"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
 
 '--- these two tests pin the FINAL contract, matching original RC6 behavior
 '--- (verified against RC6.dll 3.42.0): an orphaned/stale cField raises

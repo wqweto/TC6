@@ -418,8 +418,11 @@ type. `cTestHost` is `MultiUse`.
       origin table, TEMP + WithPrimaryKeys options) and the
       `cMemDB.CreateTableFromRs` byte-content flavor over a shared
       `mdGlobals.CreateTableFromRecordset`.
-- [ ] `ContentChangesOnly` (changed-rows flavor of the blob),
-      `GetADORsFromContent` (ADO tail), `ToJSONUTF8`, `GetRowsWithHeaders`.
+- [x] `ContentChangesOnly` — changed-rows-only blob (see the format section
+      below); loads via `Content` Let into a 0-row pending-ops recordset
+      that `UpdateBatch` applies, cross-verified with RC6 in both
+      directions.
+- [ ] `GetADORsFromContent` (ADO tail), `ToJSONUTF8`, `GetRowsWithHeaders`.
 
 ## RC6 `Content` blob format (reverse-engineered, RC6.dll 3.42.0)
 
@@ -432,8 +435,7 @@ Implemented in `cRecordset.Content` Get/Let (`pvContentWrite`/
 `pvContentRead`); **TC6-written blobs are byte-identical to RC6's** for the
 probed scenarios (outside the two ignored pointer slots) and cross-load in
 both directions — pinned by the `ContentRC6Compat` test which drives the
-real RC6.dll via COM. `ContentChangesOnly` (changed-rows-only flavor with
-original values) is still unimplemented.
+real RC6.dll via COM.
 
 - **Header** (0x00): `Long cbTotal` (= blob size incl. itself), `Long
   RecordCount` ×3, `Long 0`, `Long CurRow` (−1 when empty), `Long
@@ -481,12 +483,73 @@ test values.
 NB: `cConnection.CreateTableFromRsContent` hit a **VB6 codegen bug** —
 assigning a ByRef array *parameter* directly to a `Property Let` crashes at
 runtime (0xC000008F); the parameter must be copied to a local array first.
+
+### `ContentChangesOnly` blob format (changed rows only)
+
+Same probing methodology (plus loader **mutation testing**: flip bytes in
+an RC6-written blob, load + `UpdateBatch` in RC6, observe). The blob embeds
+raw heap pointers and uninitialized union bytes, so byte-identity is not
+attainable — the pinned contract is **semantic**: each engine loads the
+other's blob via `Content` Let and `UpdateBatch` applies the pending ops
+(covered by `ContentChangesOnlyRC6`). Layout:
+
+- `Long -cbTotal` — **negative total size** marks the changes-only flavor
+  (the `Content` Let reader dispatches on the sign), then `Long
+  LoadedRows` (rows materialized at load — pending inserts and deletes do
+  not change it), DB filename, SQL.
+- `Long FieldCount` + per field the same seven metadata strings and fixed
+  block as the full blob, but **no per-row arrays / cell data**; the
+  INTEGER width class W keeps its **load-time value** (RC6 never widens it
+  for pending edits — original values are used, pending inserts excluded).
+- The same DML-template tail (sets + key ordinals), **without** the
+  trailing zero block.
+- **Changed cells**: `Long cCells`, then per cell a `Long` slot id —
+  numeric-valued cell `(label << 9) Or colOrdinal`; pointer-valued cell
+  (text/blob) `Not ((label << 9) Or textColIdx)` where `textColIdx`
+  counts the table's **non-key TEXT/BLOB columns**; deleted row
+  `label << 9`. `label` is the row's **stable physical id** (0-based load
+  position; survives deletes/sorts, `AddNew` allocates the next one —
+  mirrored by `m_aRowLabel`/`m_lNextLabel`), and cells emit sorted by
+  label. Then 16 zero bytes (ignored), then per cell
+  `[Long vt][Long junk][8-byte union]`: vt 0 = NULL (union garbage), vt 2
+  = Integer in the low 2 bytes (rest garbage), vt 3 = Long inline, vt 5 =
+  Double, vt 14 = int64 as the Decimal mantissa low 8 bytes; pointer
+  cells vt 3 with `[Long cbBytes][ptr]` — **negative cb = UTF-16 text,
+  positive cb = raw blob bytes** — content concatenated in a **shared
+  stream right after the records**. A deleted row contributes one vt 6
+  cell with the **magic Currency 987654321098.765** (raw int64
+  &H2316A9E9B32082); an insert carries only its **assigned** cells except
+  an unassigned pk, which gets a second magic (raw &H2316A9E9B318C6 =
+  "let SQLite assign"). Junk fields and pointers are ignored by the
+  loader (mutation-verified).
+- **Rows needing a WHERE** (updates + deletes, not inserts): `Byte 0`,
+  `Long cRows`, then a **flag byte — 1 when a text-pk WHERE row carries
+  label 0, else 0** — then per row a `Long` handle — numeric pk
+  `2 * label`; text pk `&H800000` for label 0 else `&H1000000 - 2 *
+  label` (RC6's internal sorted-key handles; its loader **validates**
+  these, so the formulas must be reproduced exactly). Then 15 zero bytes,
+  then per row `[Long vt][Long junk][8-byte union]` with the pk WHERE
+  value (Long inline, or `[-cb][ptr]` with the text in a second stream
+  after the records), a final zero byte and even-length padding.
+- The WHERE targeting comes from the pk value; the labels join cells to
+  rows and (for int pk) only need mutual consistency (mutation-verified),
+  but reproducing RC6's physical labels keeps the blobs structurally
+  identical — pinned by `ChangesOnlyRC6Compat`, which drives every
+  scenario through both engines and compares the blobs byte-for-byte
+  outside the junk/pointer fields, then cross-applies each blob in the
+  opposite engine.
+- Loading a changes blob yields a 0-row recordset with `ContainsChanges` =
+  True and `Updatable` = False (RC6-verified); `UpdateBatch` then executes
+  DELETE/UPDATE/INSERT against the attached connection addressed by the
+  single key column from the DML tail (composite-pk change blobs are not
+  supported — RC6's writer emits one pk record per row regardless).
+
 - [ ] Tail / possibly out of scope for v1: DDL-parsing members
       (`cColumn.OriginalConstraint`/`ConstraintName`/`CheckExpression`/
       `PrimarySortOrder`, `cTable.Constraint`), `cCommand`/
       `cSelectCommand.Save` + `Repl*`, ADO interop (`cConverter`,
-      `CreateTableFromADORs`, `DataSource`), `cDBAccess` (RC6 thread
-      marshalling).
+      `CreateTableFromADORs`, `DataSource`). `cDBAccess` stays a stub
+      permanently (user decision).
 
 ## [src/cConnection.cls](src/cConnection.cls) — connection wrapper
 

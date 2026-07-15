@@ -102,10 +102,29 @@ Private m_aOriginal()               As Variant
 Private m_aDirty()                  As Boolean
 Private m_aRowState()               As Long
 Private m_cDeleted                  As VBA.Collection
+'--- stable physical row labels (RC6 slot ids: survive deletes/sorts, new
+'--- rows get fresh labels past every allocated one)
+Private m_aRowLabel()               As Long
+Private m_lNextLabel                As Long
+Private m_lLoadedRows               As Long
+'--- pending ops loaded from a ContentChangesOnly blob (see NOTES format)
+Private m_lChgCellCount             As Long
+Private m_aChgCellRow()             As Long
+Private m_aChgCellCol()             As Long
+Private m_aChgCellValue()           As Variant
+Private m_lChgRowCount              As Long
+Private m_aChgRowIdx()              As Long
+Private m_aChgRowPk()               As Variant
+Private m_aChgRowDelete()           As Boolean
+Private m_lChgKeyCol                As Long
 
 Public Property Get ContainsChanges() As Boolean
     Dim lRow            As Long
 
+    If m_lChgCellCount > 0 Then
+        ContainsChanges = True
+        Exit Property
+    End If
     If Not m_cDeleted Is Nothing Then
         If m_cDeleted.Count > 0 Then
             ContainsChanges = True
@@ -226,6 +245,7 @@ Public Property Set ActiveConnection(RHS As cConnection)
 End Property
 
 Public Property Get ContentChangesOnly() As Byte()
+    ContentChangesOnly = pvContentWriteChanges()
 End Property
 
 Public Property Get Content() As Byte()
@@ -260,8 +280,11 @@ Public Sub AddNew()
     '--- RC6 semantics: fill the INTEGER PK with a time-based unique id
     If m_bAutoCreateUniqueID64 And m_lAutoPkCol >= 0 Then
         m_aData(m_lAutoPkCol, m_lRecordCount) = CreateUniqueID64()
+        m_aDirty(m_lAutoPkCol, m_lRecordCount) = True
     End If
     m_aRowState(m_lRecordCount) = ROW_NEW
+    m_aRowLabel(m_lRecordCount) = m_lNextLabel
+    m_lNextLabel = m_lNextLabel + 1
     m_lRecordCount = m_lRecordCount + 1
     m_lCurRow = m_lRecordCount - 1
     RaiseEvent AddNew(m_lCurRow)
@@ -284,7 +307,7 @@ Public Sub Delete()
     '--- a pending insert just vanishes; existing rows queue a DELETE and keep
     '--- a full snapshot so ResetChanges can restore them faithfully
     If m_aRowState(m_lCurRow) <> ROW_NEW Then
-        ReDim aEntry(0 To 4) As Variant
+        ReDim aEntry(0 To 5) As Variant
         ReDim aRow(0 To m_lFieldCount - 1) As Variant
         ReDim aOrig(0 To m_lFieldCount - 1) As Variant
         ReDim aDirty(0 To m_lFieldCount - 1) As Boolean
@@ -302,6 +325,7 @@ Public Sub Delete()
         aEntry(2) = m_aRowState(m_lCurRow)
         aEntry(3) = aDirty
         aEntry(4) = aOrig
+        aEntry(5) = m_aRowLabel(m_lCurRow)
         m_cDeleted.Add aEntry
     End If
     pvRemoveRow m_lCurRow
@@ -318,6 +342,10 @@ Public Sub UpdateBatch()
     Dim vElem           As Variant
     Dim lRow            As Long
 
+    If m_lChgCellCount > 0 Then
+        pvApplyChangesOnly
+        Exit Sub
+    End If
     If Not ContainsChanges Then
         Exit Sub
     End If
@@ -622,13 +650,17 @@ Friend Sub frSetCellValueAt(ByVal lRow As Long, ByVal lCol As Long, vValue As Va
         Exit Sub
     End If
     pvEnsureWriteState
-    '--- first change to an existing row's cell captures the original value
+    '--- first change to an existing row's cell captures the original value;
+    '--- new-row assignments only mark the cell (unassigned cells stay off
+    '--- the ContentChangesOnly blob like RC6's)
     If m_aRowState(lRow) <> ROW_NEW Then
         If Not m_aDirty(lCol, lRow) Then
             m_aOriginal(lCol, lRow) = m_aData(lCol, lRow)
             m_aDirty(lCol, lRow) = True
         End If
         m_aRowState(lRow) = ROW_MODIFIED
+    Else
+        m_aDirty(lCol, lRow) = True
     End If
     m_aData(lCol, lRow) = vValue
     RaiseEvent FieldChange(lRow, lCol)
@@ -737,6 +769,7 @@ Private Sub pvMaterialize(ByVal hStmt As LongPtr, Optional ByVal bFinalize As Bo
             m_aFieldName(lCol) = FromUtf8Ptr(stub_sqlite3_column_name(hStmt, lCol))
         Next
         ReDim m_aData(0 To m_lFieldCount - 1, 0 To lCap - 1) As Variant
+        ReDim m_aRowLabel(0 To lCap - 1) As Long
     End If
     pvCaptureColumnMeta hStmt
     pvAnalyzeUpdatable
@@ -750,7 +783,9 @@ Private Sub pvMaterialize(ByVal hStmt As LongPtr, Optional ByVal bFinalize As Bo
             If lRow > UBound(m_aData, 2) Then
                 lCap = lCap * 2
                 ReDim Preserve m_aData(0 To m_lFieldCount - 1, 0 To lCap - 1) As Variant
+                ReDim Preserve m_aRowLabel(0 To lCap - 1) As Long
             End If
+            m_aRowLabel(lRow) = lRow
             For lCol = 0 To m_lFieldCount - 1
                 m_aData(lCol, lRow) = ReadColumnValue(hStmt, lCol)
                 '--- RC6 semantics: DB NULLs surface as Empty by default
@@ -771,6 +806,8 @@ Private Sub pvMaterialize(ByVal hStmt As LongPtr, Optional ByVal bFinalize As Bo
         Err.Raise vbObjectError, "cRecordset", m_oConnection.LastDBError()
     End If
     m_lRecordCount = lRow
+    m_lNextLabel = lRow
+    m_lLoadedRows = lRow
     m_lCurRow = -1
     If m_lRecordCount > 0 Then
         m_lCurRow = 0
@@ -804,6 +841,18 @@ Private Sub pvClear()
     Erase m_aDirty
     Erase m_aRowState
     Set m_cDeleted = Nothing
+    Erase m_aRowLabel
+    m_lNextLabel = 0
+    m_lLoadedRows = 0
+    m_lChgCellCount = 0
+    m_lChgRowCount = 0
+    m_lChgKeyCol = -1
+    Erase m_aChgCellRow
+    Erase m_aChgCellCol
+    Erase m_aChgCellValue
+    Erase m_aChgRowIdx
+    Erase m_aChgRowPk
+    Erase m_aChgRowDelete
     pvReleaseFields
 End Sub
 
@@ -986,6 +1035,7 @@ Private Sub pvEnsureRowCapacity(ByVal lRows As Long)
             lCap = lCap * 2
         Loop While lRows > lCap
         ReDim Preserve m_aData(0 To m_lFieldCount - 1, 0 To lCap - 1) As Variant
+        ReDim Preserve m_aRowLabel(0 To lCap - 1) As Long
         If m_bWriteState Then
             ReDim Preserve m_aOriginal(0 To m_lFieldCount - 1, 0 To lCap - 1) As Variant
             ReDim Preserve m_aDirty(0 To m_lFieldCount - 1, 0 To lCap - 1) As Boolean
@@ -1144,6 +1194,7 @@ Private Sub pvRemoveRow(ByVal lRow As Long)
             m_aDirty(lCol, lIdx) = m_aDirty(lCol, lIdx + 1)
         Next
         m_aRowState(lIdx) = m_aRowState(lIdx + 1)
+        m_aRowLabel(lIdx) = m_aRowLabel(lIdx + 1)
     Next
     m_lRecordCount = m_lRecordCount - 1
 End Sub
@@ -1170,6 +1221,7 @@ Private Sub pvRestoreDeleted()
             m_aDirty(lCol, lNew) = aDirty(lCol)
         Next
         m_aRowState(lNew) = vEntry(2)
+        m_aRowLabel(lNew) = vEntry(5)
         m_lRecordCount = m_lRecordCount + 1
     Loop
 End Sub
@@ -1306,21 +1358,25 @@ Private Sub pvPermuteRows(aIdx() As Long, Optional ByVal bRaiseMove As Boolean =
     Dim aOriginalNew()  As Variant
     Dim aDirtyNew()     As Boolean
     Dim aStateNew()     As Long
+    Dim aLabelNew()     As Long
     Dim lRow            As Long
     Dim lCol            As Long
     Dim lNewCur         As Long
 
     ReDim aDataNew(0 To m_lFieldCount - 1, 0 To UBound(m_aData, 2)) As Variant
+    ReDim aLabelNew(0 To UBound(m_aRowLabel)) As Long
     lNewCur = m_lCurRow
     For lRow = 0 To m_lRecordCount - 1
         For lCol = 0 To m_lFieldCount - 1
             aDataNew(lCol, lRow) = m_aData(lCol, aIdx(lRow))
         Next
+        aLabelNew(lRow) = m_aRowLabel(aIdx(lRow))
         If aIdx(lRow) = m_lCurRow Then
             lNewCur = lRow
         End If
     Next
     m_aData = aDataNew
+    m_aRowLabel = aLabelNew
     If m_bWriteState Then
         ReDim aOriginalNew(0 To m_lFieldCount - 1, 0 To UBound(m_aOriginal, 2)) As Variant
         ReDim aDirtyNew(0 To m_lFieldCount - 1, 0 To UBound(m_aDirty, 2)) As Boolean
@@ -1627,92 +1683,11 @@ Private Function pvContentWrite() As Byte()
         pvPutStr baOut, lPos, m_oConnection.FileName
     End If
     pvPutStr baOut, lPos, m_sSql
-    '--- distinct origin tables in first-appearance order (aTabCol holds the
-    '--- first column index of each table; used for the per-field table index
-    '--- and the DML-template tail)
-    ReDim aTabCol(0 To m_lFieldCount) As Long
-    lTables = 0
-    For lCol = 0 To m_lFieldCount - 1
-        If Len(m_aOrigTable(lCol)) > 0 Then
-            For lRow = 0 To lTables - 1
-                If StrComp(m_aOrigTable(aTabCol(lRow)), m_aOrigTable(lCol), vbTextCompare) = 0 Then
-                    Exit For
-                End If
-            Next
-            If lRow = lTables Then
-                aTabCol(lTables) = lCol
-                lTables = lTables + 1
-            End If
-        End If
-    Next
+    lTables = pvCollectTables(aTabCol)
     '--- fields
     pvPutLong baOut, lPos, m_lFieldCount
     For lCol = 0 To m_lFieldCount - 1
-        Set oColumn = frColSchema(lCol)
-        If Len(m_aOrigTable(lCol)) > 0 Then
-            pvPutStr baOut, lPos, m_aOrigDb(lCol)
-            pvPutStr baOut, lPos, "[" & m_aOrigTable(lCol) & "]"
-            pvPutStr baOut, lPos, "[" & m_aOrigColumn(lCol) & "]"
-            pvPutStr baOut, lPos, m_aDeclType(lCol)
-            sText = vbNullString
-            If Not oColumn Is Nothing Then
-                sText = pvStripQuotes(oColumn.DefaultValue)
-            End If
-            If Len(sText) = 0 Then
-                sText = "NULL"
-            End If
-            pvPutStr baOut, lPos, sText
-            sText = vbNullString
-            If Not oColumn Is Nothing Then
-                sText = oColumn.Collate
-            End If
-            If Len(sText) = 0 Then
-                sText = "BINARY"
-            End If
-            pvPutStr baOut, lPos, sText
-        Else
-            '--- expression column: all six metadata strings are empty
-            pvPutStr baOut, lPos, vbNullString
-            pvPutStr baOut, lPos, vbNullString
-            pvPutStr baOut, lPos, vbNullString
-            pvPutStr baOut, lPos, vbNullString
-            pvPutStr baOut, lPos, vbNullString
-            pvPutStr baOut, lPos, vbNullString
-        End If
-        pvPutStr baOut, lPos, m_aFieldName(lCol)
-        '--- fixed block: origin table index + column ordinal + flags
-        lTotal = 0
-        For lRow = 0 To lTables - 1
-            If StrComp(m_aOrigTable(aTabCol(lRow)), m_aOrigTable(lCol), vbTextCompare) = 0 Then
-                lTotal = lRow
-                Exit For
-            End If
-        Next
-        pvPutLong baOut, lPos, lTotal
-        pvPutLong baOut, lPos, lCol                 '--- column ordinal
-        If oColumn Is Nothing Then
-            pvPutByte baOut, lPos, 0
-            pvPutByte baOut, lPos, 0
-            pvPutByte baOut, lPos, 0
-        Else
-            '--- RC6 flags: {notnull, pk, autoinc} (UNIQUE is not serialized)
-            pvPutByte baOut, lPos, IIf(oColumn.NotNullConstraint, 1, 0)
-            pvPutByte baOut, lPos, IIf(oColumn.PrimaryKey, 1, 0)
-            pvPutByte baOut, lPos, IIf(oColumn.PrimaryAutoIncrement, 1, 0)
-        End If
-        lType = pvDeclTypeCode(m_aDeclType(lCol))
-        If Len(m_aDeclType(lCol)) = 0 Then
-            '--- expression columns type by value storage class (RC6: text
-            '--- stays text, blobs stay blobs, all numerics become doubles)
-            lType = pvValueTypeCode(lCol)
-        End If
-        pvPutLong baOut, lPos, lType
-        pvPutByte baOut, lPos, 0
-        lWidth = 0
-        If lType = 1 Then
-            lWidth = pvIntWidth(lCol)
-        End If
-        pvPutLong baOut, lPos, lWidth
+        pvWriteFieldMeta baOut, lPos, lCol, aTabCol, lTables, lType, lWidth
         '--- per-row not-null flags (one spare element)
         pvPutLong baOut, lPos, lRows + 1
         For lRow = 0 To lRows - 1
@@ -1757,24 +1732,7 @@ Private Function pvContentWrite() As Byte()
             pvPutLong baOut, lPos, lOffs
         End Select
     Next
-    '--- tail: one DML set per distinct origin table (first-appearance
-    '--- order): count of sets, then per table 3 DML templates + key column
-    '--- ordinals (the table's pk columns in the select, or all of its
-    '--- select columns when no pk), then 42 zero bytes; the whole blob is
-    '--- padded to even length
-    pvPutLong baOut, lPos, lTables
-    For lRow = 0 To lTables - 1
-        lOffs = aTabCol(lRow)
-        sText = m_aOrigTable(lOffs)
-        pvPutStr baOut, lPos, "DELETE FROM [" & sText & "] "
-        pvPutStr baOut, lPos, "UPDATE [" & sText & "] SET "
-        pvPutStr baOut, lPos, "INSERT INTO [" & sText & "] ("
-        lTotal = pvContentKeyCols(sText, m_aOrigDb(lOffs), aKeyCols)
-        pvPutLong baOut, lPos, lTotal
-        For lCol = 0 To lTotal - 1
-            pvPutLong baOut, lPos, aKeyCols(lCol)
-        Next
-    Next
+    pvWriteDmlSets baOut, lPos, aTabCol, lTables
     pvPutZeros baOut, lPos, 42
     If (lPos And 1) <> 0 Then
         pvPutZeros baOut, lPos, 1
@@ -1782,6 +1740,780 @@ Private Function pvContentWrite() As Byte()
     ReDim Preserve baOut(0 To lPos - 1) As Byte
     Call CopyMemory(baOut(0), lPos, 4)
     pvContentWrite = baOut
+End Function
+
+Private Function pvCollectTables(aTabCol() As Long) As Long
+    Dim lCol            As Long
+    Dim lIdx            As Long
+    Dim lTables         As Long
+
+    '--- distinct origin tables in first-appearance order (aTabCol holds the
+    '--- first column index of each table)
+    ReDim aTabCol(0 To m_lFieldCount) As Long
+    For lCol = 0 To m_lFieldCount - 1
+        If Len(m_aOrigTable(lCol)) > 0 Then
+            For lIdx = 0 To lTables - 1
+                If StrComp(m_aOrigTable(aTabCol(lIdx)), m_aOrigTable(lCol), vbTextCompare) = 0 Then
+                    Exit For
+                End If
+            Next
+            If lIdx = lTables Then
+                aTabCol(lTables) = lCol
+                lTables = lTables + 1
+            End If
+        End If
+    Next
+    pvCollectTables = lTables
+End Function
+
+Private Sub pvWriteFieldMeta(baOut() As Byte, lPos As Long, ByVal lCol As Long, aTabCol() As Long, ByVal lTables As Long, lType As Long, lWidth As Long, Optional ByVal bLoadedOnly As Boolean)
+    Dim oColumn         As cColumn
+    Dim sText           As String
+    Dim lIdx            As Long
+
+    Set oColumn = frColSchema(lCol)
+    If Len(m_aOrigTable(lCol)) > 0 Then
+        pvPutStr baOut, lPos, m_aOrigDb(lCol)
+        pvPutStr baOut, lPos, "[" & m_aOrigTable(lCol) & "]"
+        pvPutStr baOut, lPos, "[" & m_aOrigColumn(lCol) & "]"
+        pvPutStr baOut, lPos, m_aDeclType(lCol)
+        sText = vbNullString
+        If Not oColumn Is Nothing Then
+            sText = pvStripQuotes(oColumn.DefaultValue)
+        End If
+        If Len(sText) = 0 Then
+            sText = "NULL"
+        End If
+        pvPutStr baOut, lPos, sText
+        sText = vbNullString
+        If Not oColumn Is Nothing Then
+            sText = oColumn.Collate
+        End If
+        If Len(sText) = 0 Then
+            sText = "BINARY"
+        End If
+        pvPutStr baOut, lPos, sText
+    Else
+        '--- expression column: all six metadata strings are empty
+        pvPutStr baOut, lPos, vbNullString
+        pvPutStr baOut, lPos, vbNullString
+        pvPutStr baOut, lPos, vbNullString
+        pvPutStr baOut, lPos, vbNullString
+        pvPutStr baOut, lPos, vbNullString
+        pvPutStr baOut, lPos, vbNullString
+    End If
+    pvPutStr baOut, lPos, m_aFieldName(lCol)
+    '--- fixed block: origin table index + column ordinal + flags
+    lType = 0
+    For lIdx = 0 To lTables - 1
+        If StrComp(m_aOrigTable(aTabCol(lIdx)), m_aOrigTable(lCol), vbTextCompare) = 0 Then
+            lType = lIdx
+            Exit For
+        End If
+    Next
+    pvPutLong baOut, lPos, lType
+    pvPutLong baOut, lPos, lCol                     '--- column ordinal
+    If oColumn Is Nothing Then
+        pvPutByte baOut, lPos, 0
+        pvPutByte baOut, lPos, 0
+        pvPutByte baOut, lPos, 0
+    Else
+        '--- RC6 flags: {notnull, pk, autoinc} (UNIQUE is not serialized)
+        pvPutByte baOut, lPos, IIf(oColumn.NotNullConstraint, 1, 0)
+        pvPutByte baOut, lPos, IIf(oColumn.PrimaryKey, 1, 0)
+        pvPutByte baOut, lPos, IIf(oColumn.PrimaryAutoIncrement, 1, 0)
+    End If
+    lType = pvDeclTypeCode(m_aDeclType(lCol))
+    If Len(m_aDeclType(lCol)) = 0 Then
+        '--- expression columns type by value storage class (RC6: text
+        '--- stays text, blobs stay blobs, all numerics become doubles)
+        lType = pvValueTypeCode(lCol)
+    End If
+    pvPutLong baOut, lPos, lType
+    pvPutByte baOut, lPos, 0
+    lWidth = 0
+    If lType = 1 Then
+        lWidth = pvIntWidth(lCol, bLoadedOnly)
+    End If
+    pvPutLong baOut, lPos, lWidth
+End Sub
+
+Private Sub pvWriteDmlSets(baOut() As Byte, lPos As Long, aTabCol() As Long, ByVal lTables As Long)
+    Dim lIdx            As Long
+    Dim lCol            As Long
+    Dim lCount          As Long
+    Dim sText           As String
+    Dim aKeyCols()      As Long
+
+    '--- one DML set per distinct origin table: 3 DML templates + key column
+    '--- ordinals (the table's pk columns in the select, or all of its
+    '--- select columns when no pk)
+    pvPutLong baOut, lPos, lTables
+    For lIdx = 0 To lTables - 1
+        sText = m_aOrigTable(aTabCol(lIdx))
+        pvPutStr baOut, lPos, "DELETE FROM [" & sText & "] "
+        pvPutStr baOut, lPos, "UPDATE [" & sText & "] SET "
+        pvPutStr baOut, lPos, "INSERT INTO [" & sText & "] ("
+        lCount = pvContentKeyCols(sText, m_aOrigDb(aTabCol(lIdx)), aKeyCols)
+        pvPutLong baOut, lPos, lCount
+        For lCol = 0 To lCount - 1
+            pvPutLong baOut, lPos, aKeyCols(lCol)
+        Next
+    Next
+End Sub
+
+Private Function pvContentWriteChanges() As Byte()
+    Const DEL_MAGIC_LO  As Long = &HE9B32082
+    Const DEF_MAGIC_LO  As Long = &HE9B318C6
+    Const DEL_MAGIC_HI  As Long = &H2316A9
+    Dim baOut()         As Byte
+    Dim lPos            As Long
+    Dim lCol            As Long
+    Dim lRow            As Long
+    Dim lType           As Long
+    Dim lWidth          As Long
+    Dim aTabCol()       As Long
+    Dim lTables         As Long
+    Dim lCells          As Long
+    Dim aSlot()         As Long
+    Dim aVt()           As Long
+    Dim aLo()           As Long
+    Dim aHi()           As Long
+    Dim baStream()      As Byte
+    Dim lStream         As Long
+    Dim lRowsC          As Long
+    Dim aRowIdx()       As Long
+    Dim aRowPk()        As Variant
+    Dim vEntry          As Variant
+    Dim aPk()           As Variant
+    Dim lIdx            As Long
+    Dim lKeyCol         As Long
+    Dim bTextPk         As Boolean
+    Dim lMax            As Long
+    Dim baPkStream()    As Byte
+    Dim lPkStream       As Long
+    Dim lVt             As Long
+    Dim lLo             As Long
+    Dim lHi             As Long
+    Dim bPointer        As Boolean
+    Dim aOpLabel()      As Long
+    Dim aOpKind()       As Long
+    Dim aOpRow()        As Long
+    Dim aOpPk()         As Variant
+    Dim lOps            As Long
+
+    If Not m_bUpdatable Or m_lPkCount <> 1 Then
+        Err.Raise vbObjectError, "cRecordset", "Recordset is not updatable"
+    End If
+    lKeyCol = m_aPkCols(0)
+    bTextPk = (pvDeclTypeCode(m_aDeclType(lKeyCol)) >= 3)
+    lMax = m_lRecordCount * m_lFieldCount + 16
+    If Not m_cDeleted Is Nothing Then
+        lMax = lMax + m_cDeleted.Count
+    End If
+    ReDim aSlot(0 To lMax) As Long
+    ReDim aVt(0 To lMax) As Long
+    ReDim aLo(0 To lMax) As Long
+    ReDim aHi(0 To lMax) As Long
+    ReDim aRowIdx(0 To lMax) As Long
+    ReDim aRowPk(0 To lMax) As Variant
+    ReDim baStream(0 To 255) As Byte
+    ReDim baPkStream(0 To 255) As Byte
+    '--- collect delete/modify/insert ops sorted by physical row label (RC6
+    '--- emission order); deletes carry their snapshotted label
+    ReDim aOpLabel(0 To lMax) As Long
+    ReDim aOpKind(0 To lMax) As Long
+    ReDim aOpRow(0 To lMax) As Long
+    ReDim aOpPk(0 To lMax) As Variant
+    If Not m_cDeleted Is Nothing Then
+        For Each vEntry In m_cDeleted
+            aPk = vEntry(1)
+            pvChgAddOp aOpLabel, aOpKind, aOpRow, aOpPk, lOps, CLng(vEntry(5)), 0, 0, aPk(0)
+        Next
+    End If
+    If m_bWriteState Then
+        For lRow = 0 To m_lRecordCount - 1
+            Select Case m_aRowState(lRow)
+            Case ROW_MODIFIED
+                pvChgAddOp aOpLabel, aOpKind, aOpRow, aOpPk, lOps, m_aRowLabel(lRow), 1, lRow, pvPkWhereValue(lRow, 0)
+            Case ROW_NEW
+                pvChgAddOp aOpLabel, aOpKind, aOpRow, aOpPk, lOps, m_aRowLabel(lRow), 2, lRow, Empty
+            End Select
+        Next
+    End If
+    For lIdx = 0 To lOps - 1
+        lRow = aOpRow(lIdx)
+        Select Case aOpKind(lIdx)
+        Case 0
+            aSlot(lCells) = aOpLabel(lIdx) * 512
+            aVt(lCells) = 6
+            aLo(lCells) = DEL_MAGIC_LO
+            aHi(lCells) = DEL_MAGIC_HI
+            lCells = lCells + 1
+            aRowIdx(lRowsC) = aOpLabel(lIdx)
+            aRowPk(lRowsC) = aOpPk(lIdx)
+            lRowsC = lRowsC + 1
+        Case 1
+            For lCol = 0 To m_lFieldCount - 1
+                If m_aDirty(lCol, lRow) Then
+                    pvChgPutCell m_aData(lCol, lRow), aOpLabel(lIdx), lCol, lKeyCol, aSlot, aVt, aLo, aHi, lCells, baStream, lStream
+                End If
+            Next
+            aRowIdx(lRowsC) = aOpLabel(lIdx)
+            aRowPk(lRowsC) = aOpPk(lIdx)
+            lRowsC = lRowsC + 1
+        Case 2
+            '--- inserts carry only the assigned cells; an unassigned pk gets
+            '--- the "use default" magic so the loader lets SQLite assign it
+            For lCol = 0 To m_lFieldCount - 1
+                If m_aDirty(lCol, lRow) Then
+                    pvChgPutCell m_aData(lCol, lRow), aOpLabel(lIdx), lCol, lKeyCol, aSlot, aVt, aLo, aHi, lCells, baStream, lStream
+                ElseIf lCol = lKeyCol Then
+                    aSlot(lCells) = aOpLabel(lIdx) * 512 + lCol
+                    aVt(lCells) = 6
+                    aLo(lCells) = DEF_MAGIC_LO
+                    aHi(lCells) = DEL_MAGIC_HI
+                    lCells = lCells + 1
+                End If
+            Next
+        End Select
+    Next
+    ReDim baOut(0 To 1023) As Byte
+    pvPutLong baOut, lPos, 0
+    pvPutLong baOut, lPos, m_lLoadedRows
+    If m_oConnection Is Nothing Then
+        pvPutStr baOut, lPos, vbNullString
+    Else
+        pvPutStr baOut, lPos, m_oConnection.FileName
+    End If
+    pvPutStr baOut, lPos, m_sSql
+    lTables = pvCollectTables(aTabCol)
+    pvPutLong baOut, lPos, m_lFieldCount
+    For lCol = 0 To m_lFieldCount - 1
+        pvWriteFieldMeta baOut, lPos, lCol, aTabCol, lTables, lType, lWidth, True
+    Next
+    pvWriteDmlSets baOut, lPos, aTabCol, lTables
+    '--- cell slot ids + records + shared text stream
+    pvPutLong baOut, lPos, lCells
+    For lIdx = 0 To lCells - 1
+        pvPutLong baOut, lPos, aSlot(lIdx)
+    Next
+    pvPutZeros baOut, lPos, 16
+    For lIdx = 0 To lCells - 1
+        pvPutLong baOut, lPos, aVt(lIdx)
+        pvPutLong baOut, lPos, IIf(aVt(lIdx) = 6, 2, 0)
+        pvPutLong baOut, lPos, aLo(lIdx)
+        pvPutLong baOut, lPos, aHi(lIdx)
+    Next
+    For lIdx = 0 To lStream - 1
+        pvPutByte baOut, lPos, baStream(lIdx)
+    Next
+    '--- rows needing a WHERE (updates + deletes): row labels + pk records
+    pvPutByte baOut, lPos, 0
+    pvPutLong baOut, lPos, lRowsC
+    '--- flag byte: set when a text-pk WHERE row carries the label-0 handle
+    lVt = 0
+    If bTextPk Then
+        For lIdx = 0 To lRowsC - 1
+            If aRowIdx(lIdx) = 0 Then
+                lVt = 1
+            End If
+        Next
+    End If
+    pvPutByte baOut, lPos, lVt
+    For lIdx = 0 To lRowsC - 1
+        If Not bTextPk Then
+            pvPutLong baOut, lPos, 2 * aRowIdx(lIdx)
+        ElseIf aRowIdx(lIdx) = 0 Then
+            pvPutLong baOut, lPos, &H800000
+        Else
+            pvPutLong baOut, lPos, &H1000000 - 2 * aRowIdx(lIdx)
+        End If
+    Next
+    pvPutZeros baOut, lPos, 15
+    For lIdx = 0 To lRowsC - 1
+        pvChgEncodeValue aRowPk(lIdx), lVt, lLo, lHi, baPkStream, lPkStream, bPointer
+        pvPutLong baOut, lPos, lVt
+        pvPutLong baOut, lPos, 1
+        pvPutLong baOut, lPos, lLo
+        pvPutLong baOut, lPos, lHi
+    Next
+    For lIdx = 0 To lPkStream - 1
+        pvPutByte baOut, lPos, baPkStream(lIdx)
+    Next
+    pvPutByte baOut, lPos, 0
+    If (lPos And 1) <> 0 Then
+        pvPutZeros baOut, lPos, 1
+    End If
+    ReDim Preserve baOut(0 To lPos - 1) As Byte
+    lIdx = -lPos
+    Call CopyMemory(baOut(0), lIdx, 4)
+    pvContentWriteChanges = baOut
+End Function
+
+Private Sub pvChgAddOp(aOpLabel() As Long, aOpKind() As Long, aOpRow() As Long, aOpPk() As Variant, lOps As Long, ByVal lLabel As Long, ByVal lKind As Long, ByVal lRow As Long, vPk As Variant)
+    Dim lIdx            As Long
+
+    lIdx = lOps
+    Do While lIdx > 0
+        If aOpLabel(lIdx - 1) <= lLabel Then
+            Exit Do
+        End If
+        aOpLabel(lIdx) = aOpLabel(lIdx - 1)
+        aOpKind(lIdx) = aOpKind(lIdx - 1)
+        aOpRow(lIdx) = aOpRow(lIdx - 1)
+        aOpPk(lIdx) = aOpPk(lIdx - 1)
+        lIdx = lIdx - 1
+    Loop
+    aOpLabel(lIdx) = lLabel
+    aOpKind(lIdx) = lKind
+    aOpRow(lIdx) = lRow
+    aOpPk(lIdx) = vPk
+    lOps = lOps + 1
+End Sub
+
+Private Sub pvChgPutCell(vValue As Variant, ByVal lRow As Long, ByVal lCol As Long, ByVal lKeyCol As Long, aSlot() As Long, aVt() As Long, aLo() As Long, aHi() As Long, lCells As Long, baStream() As Byte, lStream As Long)
+    Dim lVt             As Long
+    Dim lLo             As Long
+    Dim lHi             As Long
+    Dim bPointer        As Boolean
+
+    pvChgEncodeValue vValue, lVt, lLo, lHi, baStream, lStream, bPointer
+    If bPointer Then
+        aSlot(lCells) = Not (lRow * 512& + pvTextColIndex(lCol, lKeyCol))
+    Else
+        aSlot(lCells) = lRow * 512& + lCol
+    End If
+    aVt(lCells) = lVt
+    aLo(lCells) = lLo
+    aHi(lCells) = lHi
+    lCells = lCells + 1
+End Sub
+
+Private Sub pvChgEncodeValue(vValue As Variant, lVt As Long, lLo As Long, lHi As Long, baStream() As Byte, lStream As Long, bPointer As Boolean)
+    Const VT_I8         As Integer = 20
+    Dim baCell()        As Byte
+    Dim sText           As String
+    Dim dblValue        As Double
+
+    lVt = 0
+    lLo = 0
+    lHi = 0
+    bPointer = False
+    If pvIsNullCell(vValue) Then
+        Exit Sub
+    End If
+    Select Case VarType(vValue)
+    Case vbByte Or vbArray
+        baCell = vValue
+        lVt = 3
+        lLo = pvBytesLen(baCell)
+        pvChgAppendBytes baStream, lStream, baCell
+        bPointer = True
+    Case vbString
+        sText = vValue
+        lVt = 3
+        lLo = -LenB(sText)
+        baCell = sText
+        pvChgAppendBytes baStream, lStream, baCell
+        bPointer = True
+    Case vbInteger
+        lVt = 2
+        lLo = CLng(vValue) And &HFFFF&
+    Case vbLong, vbByte, vbBoolean
+        lVt = 3
+        lLo = CLng(vValue)
+    Case vbCurrency, vbDecimal, VT_I8
+        lVt = 14
+        pvChgLow8 vValue, lLo, lHi
+    Case Else
+        dblValue = CDbl(vValue)
+        lVt = 5
+        Call CopyMemory(lLo, dblValue, 4)
+        Call CopyMemory(lHi, ByVal VarPtr(dblValue) + 4, 4)
+    End Select
+End Sub
+
+Private Sub pvChgLow8(vValue As Variant, lLo As Long, lHi As Long)
+    Const VT_I8         As Integer = 20
+    Dim vDec            As Variant
+
+    If VarType(vValue) = VT_I8 Then
+        Call CopyMemory(lLo, ByVal VarPtr(vValue) + 8, 4)
+        Call CopyMemory(lHi, ByVal VarPtr(vValue) + 12, 4)
+    Else
+        vDec = CDec(vValue)
+        Call CopyMemory(lLo, ByVal VarPtr(vDec) + 8, 4)
+        Call CopyMemory(lHi, ByVal VarPtr(vDec) + 12, 4)
+    End If
+End Sub
+
+Private Sub pvChgAppendBytes(baStream() As Byte, lStream As Long, baCell() As Byte)
+    Dim lSize           As Long
+
+    lSize = pvBytesLen(baCell)
+    If lSize = 0 Then
+        Exit Sub
+    End If
+    Do While lStream + lSize > UBound(baStream) + 1
+        ReDim Preserve baStream(0 To 2 * (UBound(baStream) + 1) - 1) As Byte
+    Loop
+    Call CopyMemory(baStream(lStream), baCell(0), lSize)
+    lStream = lStream + lSize
+End Sub
+
+Private Function pvTextColIndex(ByVal lCol As Long, ByVal lKeyCol As Long) As Long
+    Dim lIdx            As Long
+
+    For lIdx = 0 To lCol - 1
+        If lIdx <> lKeyCol Then
+            If pvDeclTypeCode(m_aDeclType(lIdx)) >= 3 Then
+                pvTextColIndex = pvTextColIndex + 1
+            End If
+        End If
+    Next
+End Function
+
+Private Sub pvContentReadChanges(baContent() As Byte)
+    Const DEL_MAGIC_LO  As Long = &HE9B32082
+    Const DEF_MAGIC_LO  As Long = &HE9B318C6
+    Const DEL_MAGIC_HI  As Long = &H2316A9
+    Dim lPos            As Long
+    Dim lCol            As Long
+    Dim lIdx            As Long
+    Dim lJdx            As Long
+    Dim lCount          As Long
+    Dim sDefault        As String
+    Dim sCollate        As String
+    Dim lNotNull        As Long
+    Dim lPk             As Long
+    Dim lAutoInc        As Long
+    Dim lTables         As Long
+    Dim lCells          As Long
+    Dim aSlot()         As Long
+    Dim aVt()           As Long
+    Dim aLo()           As Long
+    Dim aHi()           As Long
+    Dim lRowsC          As Long
+    Dim lVal            As Long
+    Dim bTextPk         As Boolean
+    Dim nVal            As Integer
+    Dim sngVal          As Single
+    Dim dblVal          As Double
+    Dim cyVal           As Currency
+
+    pvClear
+    lPos = 4
+    pvGetLong baContent, lPos                       '--- source RecordCount
+    pvGetStr baContent, lPos                        '--- source DB filename
+    m_sSql = pvGetStr(baContent, lPos)
+    m_lFieldCount = pvGetLong(baContent, lPos)
+    If m_lFieldCount > 0 Then
+        ReDim m_aFieldName(0 To m_lFieldCount - 1) As String
+        ReDim m_aOrigColumn(0 To m_lFieldCount - 1) As String
+        ReDim m_aOrigTable(0 To m_lFieldCount - 1) As String
+        ReDim m_aOrigDb(0 To m_lFieldCount - 1) As String
+        ReDim m_aDeclType(0 To m_lFieldCount - 1) As String
+        ReDim m_aColSchema(0 To m_lFieldCount - 1) As cColumn
+        ReDim m_aData(0 To m_lFieldCount - 1, 0 To 15) As Variant
+    End If
+    For lCol = 0 To m_lFieldCount - 1
+        m_aOrigDb(lCol) = pvGetStr(baContent, lPos)
+        m_aOrigTable(lCol) = pvUnbracket(pvGetStr(baContent, lPos))
+        m_aOrigColumn(lCol) = pvUnbracket(pvGetStr(baContent, lPos))
+        m_aDeclType(lCol) = pvGetStr(baContent, lPos)
+        sDefault = pvGetStr(baContent, lPos)
+        sCollate = pvGetStr(baContent, lPos)
+        m_aFieldName(lCol) = pvGetStr(baContent, lPos)
+        pvGetLong baContent, lPos
+        pvGetLong baContent, lPos                   '--- column ordinal
+        lNotNull = pvGetByte(baContent, lPos)
+        lPk = pvGetByte(baContent, lPos)
+        lAutoInc = pvGetByte(baContent, lPos)
+        pvGetLong baContent, lPos                   '--- type code
+        pvGetByte baContent, lPos
+        pvGetLong baContent, lPos                   '--- int width class
+        If Len(m_aOrigTable(lCol)) > 0 Then
+            Set m_aColSchema(lCol) = New cColumn
+            If StrComp(sDefault, "NULL", vbBinaryCompare) = 0 Then
+                sDefault = vbNullString
+            End If
+            m_aColSchema(lCol).frInit m_aOrigColumn(lCol), m_aDeclType(lCol), sDefault, lNotNull <> 0, lPk, lAutoInc <> 0, sCollate
+        End If
+    Next
+    '--- DML sets: capture the first table's single key column ordinal
+    m_lChgKeyCol = -1
+    lTables = pvGetLong(baContent, lPos)
+    For lIdx = 1 To lTables
+        pvGetStr baContent, lPos
+        pvGetStr baContent, lPos
+        pvGetStr baContent, lPos
+        lCount = pvGetLong(baContent, lPos)
+        For lJdx = 1 To lCount
+            lVal = pvGetLong(baContent, lPos)
+            If lIdx = 1 And lJdx = 1 And lCount = 1 Then
+                m_lChgKeyCol = lVal
+            End If
+        Next
+    Next
+    '--- cell slots + records, then the shared text stream in cell order
+    lCells = pvGetLong(baContent, lPos)
+    m_lChgCellCount = lCells
+    If lCells > 0 Then
+        ReDim aSlot(0 To lCells - 1) As Long
+        ReDim aVt(0 To lCells - 1) As Long
+        ReDim aLo(0 To lCells - 1) As Long
+        ReDim aHi(0 To lCells - 1) As Long
+        ReDim m_aChgCellRow(0 To lCells - 1) As Long
+        ReDim m_aChgCellCol(0 To lCells - 1) As Long
+        ReDim m_aChgCellValue(0 To lCells - 1) As Variant
+    End If
+    For lIdx = 0 To lCells - 1
+        aSlot(lIdx) = pvGetLong(baContent, lPos)
+    Next
+    lPos = lPos + 16
+    For lIdx = 0 To lCells - 1
+        aVt(lIdx) = pvGetLong(baContent, lPos)
+        pvGetLong baContent, lPos
+        aLo(lIdx) = pvGetLong(baContent, lPos)
+        aHi(lIdx) = pvGetLong(baContent, lPos)
+    Next
+    For lIdx = 0 To lCells - 1
+        If aSlot(lIdx) < 0 Then
+            lVal = Not aSlot(lIdx)
+            m_aChgCellRow(lIdx) = lVal \ 512
+            m_aChgCellCol(lIdx) = pvColFromTextIndex(lVal Mod 512)
+            '--- positive size = raw blob bytes, negative = UTF-16 text
+            m_aChgCellValue(lIdx) = pvChgSlice(baContent, lPos, Abs(aLo(lIdx)), aLo(lIdx) > 0)
+        Else
+            m_aChgCellRow(lIdx) = aSlot(lIdx) \ 512
+            m_aChgCellCol(lIdx) = aSlot(lIdx) Mod 512
+            Select Case aVt(lIdx)
+            Case 0, 1
+                m_aChgCellValue(lIdx) = pvNullCell()
+            Case 2
+                Call CopyMemory(nVal, aLo(lIdx), 2)
+                m_aChgCellValue(lIdx) = CLng(nVal)
+            Case 3
+                m_aChgCellValue(lIdx) = aLo(lIdx)
+            Case 4
+                Call CopyMemory(sngVal, aLo(lIdx), 4)
+                m_aChgCellValue(lIdx) = sngVal
+            Case 5, 7
+                Call CopyMemory(dblVal, aLo(lIdx), 4)
+                Call CopyMemory(ByVal VarPtr(dblVal) + 4, aHi(lIdx), 4)
+                m_aChgCellValue(lIdx) = dblVal
+            Case 6
+                If aLo(lIdx) = DEL_MAGIC_LO And aHi(lIdx) = DEL_MAGIC_HI Then
+                    m_aChgCellCol(lIdx) = -1
+                ElseIf aLo(lIdx) = DEF_MAGIC_LO And aHi(lIdx) = DEL_MAGIC_HI Then
+                    '--- "use default" pk cell: excluded from the INSERT
+                    m_aChgCellCol(lIdx) = -2
+                Else
+                    Call CopyMemory(cyVal, aLo(lIdx), 4)
+                    Call CopyMemory(ByVal VarPtr(cyVal) + 4, aHi(lIdx), 4)
+                    m_aChgCellValue(lIdx) = cyVal
+                End If
+            Case Else
+                m_aChgCellValue(lIdx) = pvChgInt64(aLo(lIdx), aHi(lIdx))
+            End Select
+        End If
+    Next
+    '--- rows with WHERE records
+    pvGetByte baContent, lPos
+    lRowsC = pvGetLong(baContent, lPos)
+    pvGetByte baContent, lPos
+    m_lChgRowCount = lRowsC
+    If lRowsC > 0 Then
+        ReDim m_aChgRowIdx(0 To lRowsC - 1) As Long
+        ReDim m_aChgRowPk(0 To lRowsC - 1) As Variant
+        ReDim m_aChgRowDelete(0 To lRowsC - 1) As Boolean
+        ReDim aVt(0 To lRowsC - 1) As Long
+        ReDim aLo(0 To lRowsC - 1) As Long
+        ReDim aHi(0 To lRowsC - 1) As Long
+    End If
+    If m_lChgKeyCol >= 0 Then
+        bTextPk = (pvDeclTypeCode(m_aDeclType(m_lChgKeyCol)) >= 3)
+    End If
+    For lIdx = 0 To lRowsC - 1
+        lVal = pvGetLong(baContent, lPos)
+        If Not bTextPk Then
+            m_aChgRowIdx(lIdx) = lVal \ 2
+        ElseIf lVal = &H800000 Then
+            m_aChgRowIdx(lIdx) = 0
+        Else
+            m_aChgRowIdx(lIdx) = (&H1000000 - lVal) \ 2
+        End If
+    Next
+    lPos = lPos + 15
+    For lIdx = 0 To lRowsC - 1
+        aVt(lIdx) = pvGetLong(baContent, lPos)
+        pvGetLong baContent, lPos
+        aLo(lIdx) = pvGetLong(baContent, lPos)
+        aHi(lIdx) = pvGetLong(baContent, lPos)
+    Next
+    For lIdx = 0 To lRowsC - 1
+        If bTextPk Then
+            m_aChgRowPk(lIdx) = pvChgSlice(baContent, lPos, Abs(aLo(lIdx)), aLo(lIdx) > 0)
+        ElseIf aVt(lIdx) = 14 Or aVt(lIdx) = 20 Then
+            m_aChgRowPk(lIdx) = pvChgInt64(aLo(lIdx), aHi(lIdx))
+        Else
+            m_aChgRowPk(lIdx) = aLo(lIdx)
+        End If
+        For lJdx = 0 To lCells - 1
+            If m_aChgCellCol(lJdx) = -1 And m_aChgCellRow(lJdx) = m_aChgRowIdx(lIdx) Then
+                m_aChgRowDelete(lIdx) = True
+            End If
+        Next
+    Next
+    m_lRecordCount = 0
+    m_lCurRow = -1
+    m_bUpdatable = False
+    m_bHasColSchema = True
+    pvEnsureFields
+End Sub
+
+Private Function pvColFromTextIndex(ByVal lTextIdx As Long) As Long
+    Dim lCol            As Long
+    Dim lSeen           As Long
+
+    For lCol = 0 To m_lFieldCount - 1
+        If lCol <> m_lChgKeyCol Then
+            If pvDeclTypeCode(m_aDeclType(lCol)) >= 3 Then
+                If lSeen = lTextIdx Then
+                    pvColFromTextIndex = lCol
+                    Exit Function
+                End If
+                lSeen = lSeen + 1
+            End If
+        End If
+    Next
+    pvColFromTextIndex = 0
+End Function
+
+Private Function pvChgSlice(baContent() As Byte, lPos As Long, ByVal lSize As Long, ByVal bBlob As Boolean) As Variant
+    Dim baCell()        As Byte
+    Dim sText           As String
+
+    If bBlob Then
+        baCell = vbNullString
+        If lSize > 0 Then
+            ReDim baCell(0 To lSize - 1) As Byte
+            Call CopyMemory(baCell(0), baContent(lPos), lSize)
+        End If
+        pvChgSlice = baCell
+    Else
+        sText = String$(lSize \ 2, 0)
+        If lSize > 0 Then
+            Call CopyMemory(ByVal StrPtr(sText), baContent(lPos), lSize)
+        End If
+        pvChgSlice = sText
+    End If
+    lPos = lPos + lSize
+End Function
+
+Private Function pvChgInt64(ByVal lLo As Long, ByVal lHi As Long) As Variant
+    Const VT_I8         As Integer = 20
+    Dim vRet            As Variant
+    Dim nVt             As Integer
+
+    nVt = VT_I8
+    Call CopyMemory(vRet, nVt, 2)
+    Call CopyMemory(ByVal VarPtr(vRet) + 8, lLo, 4)
+    Call CopyMemory(ByVal VarPtr(vRet) + 12, lHi, 4)
+    pvChgInt64 = vRet
+End Function
+
+Private Sub pvApplyChangesOnly()
+    Dim lIdx            As Long
+    Dim lJdx            As Long
+    Dim sSql            As String
+    Dim sCols           As String
+    Dim aParams()       As Variant
+    Dim lCount          As Long
+    Dim sTable          As String
+    Dim sKey            As String
+    Dim aDone()         As Boolean
+
+    If m_oConnection Is Nothing Then
+        Err.Raise vbObjectError, "cRecordset", "No active connection"
+    End If
+    If m_lChgKeyCol < 0 Or m_lChgKeyCol >= m_lFieldCount Then
+        Err.Raise vbObjectError, "cRecordset", "Recordset is not updatable"
+    End If
+    sTable = QuoteIdentifier(IIf(Len(m_aOrigDb(m_lChgKeyCol)) > 0, m_aOrigDb(m_lChgKeyCol), "main")) & "." & QuoteIdentifier(m_aOrigTable(m_lChgKeyCol))
+    sKey = QuoteIdentifier(m_aOrigColumn(m_lChgKeyCol))
+    m_oConnection.BeginTrans "tc6_applychanges"
+    On Error GoTo EH
+    For lIdx = 0 To m_lChgRowCount - 1
+        If m_aChgRowDelete(lIdx) Then
+            ReDim aParams(0 To 0) As Variant
+            aParams(0) = m_aChgRowPk(lIdx)
+            pvExecParams "DELETE FROM " & sTable & " WHERE " & sKey & " = ?", aParams
+        Else
+            sSql = vbNullString
+            ReDim aParams(0 To m_lChgCellCount) As Variant
+            lCount = 0
+            For lJdx = 0 To m_lChgCellCount - 1
+                If m_aChgCellRow(lJdx) = m_aChgRowIdx(lIdx) And m_aChgCellCol(lJdx) >= 0 Then
+                    If lCount > 0 Then
+                        sSql = sSql & ", "
+                    End If
+                    sSql = sSql & QuoteIdentifier(m_aOrigColumn(m_aChgCellCol(lJdx))) & " = ?"
+                    aParams(lCount) = m_aChgCellValue(lJdx)
+                    lCount = lCount + 1
+                End If
+            Next
+            If lCount > 0 Then
+                aParams(lCount) = m_aChgRowPk(lIdx)
+                ReDim Preserve aParams(0 To lCount) As Variant
+                pvExecParams "UPDATE " & sTable & " SET " & sSql & " WHERE " & sKey & " = ?", aParams
+            End If
+        End If
+    Next
+    '--- cell rows without a WHERE record are pending inserts
+    ReDim aDone(0 To m_lChgCellCount) As Boolean
+    For lIdx = 0 To m_lChgCellCount - 1
+        If m_aChgCellCol(lIdx) >= 0 And Not aDone(lIdx) And Not pvChgRowHasWhere(m_aChgCellRow(lIdx)) Then
+            sSql = vbNullString
+            sCols = vbNullString
+            ReDim aParams(0 To m_lChgCellCount) As Variant
+            lCount = 0
+            For lJdx = lIdx To m_lChgCellCount - 1
+                If m_aChgCellRow(lJdx) = m_aChgCellRow(lIdx) And m_aChgCellCol(lJdx) >= 0 Then
+                    If lCount > 0 Then
+                        sCols = sCols & ", "
+                        sSql = sSql & ", "
+                    End If
+                    sCols = sCols & QuoteIdentifier(m_aOrigColumn(m_aChgCellCol(lJdx)))
+                    sSql = sSql & "?"
+                    aParams(lCount) = m_aChgCellValue(lJdx)
+                    lCount = lCount + 1
+                    aDone(lJdx) = True
+                End If
+            Next
+            ReDim Preserve aParams(0 To lCount - 1) As Variant
+            pvExecParams "INSERT INTO " & sTable & " (" & sCols & ") VALUES (" & sSql & ")", aParams
+        End If
+    Next
+    m_oConnection.CommitTrans "tc6_applychanges"
+    m_lChgCellCount = 0
+    m_lChgRowCount = 0
+    Exit Sub
+EH:
+    m_oConnection.RollbackTrans "tc6_applychanges"
+    Err.Raise Err.Number, Err.Source, Err.Description
+End Sub
+
+Private Function pvChgRowHasWhere(ByVal lRow As Long) As Boolean
+    Dim lIdx            As Long
+
+    For lIdx = 0 To m_lChgRowCount - 1
+        If m_aChgRowIdx(lIdx) = lRow Then
+            pvChgRowHasWhere = True
+            Exit Function
+        End If
+    Next
 End Function
 
 Private Sub pvContentRead(baContent() As Byte)
@@ -1805,6 +2537,11 @@ Private Sub pvContentRead(baContent() As Byte)
     Dim lUpdatable      As Long
     Dim sPkType         As String
 
+    lPos = 0
+    If pvGetLong(baContent, lPos) < 0 Then
+        pvContentReadChanges baContent
+        Exit Sub
+    End If
     pvClear
     lPos = 4                                        '--- cbTotal
     lRows = pvGetLong(baContent, lPos)
@@ -1825,6 +2562,12 @@ Private Sub pvContentRead(baContent() As Byte)
         ReDim m_aDeclType(0 To m_lFieldCount - 1) As String
         ReDim m_aColSchema(0 To m_lFieldCount - 1) As cColumn
         ReDim m_aData(0 To m_lFieldCount - 1, 0 To IIf(lRows > 16, lRows, 16) - 1) As Variant
+        ReDim m_aRowLabel(0 To IIf(lRows > 16, lRows, 16) - 1) As Long
+        For lRow = 0 To lRows - 1
+            m_aRowLabel(lRow) = lRow
+        Next
+        m_lNextLabel = lRows
+        m_lLoadedRows = lRows
     End If
     For lCol = 0 To m_lFieldCount - 1
         m_aOrigDb(lCol) = pvGetStr(baContent, lPos)
@@ -2062,20 +2805,30 @@ Private Function pvValueTypeCode(ByVal lCol As Long) As Long
     Next
 End Function
 
-Private Function pvIntWidth(ByVal lCol As Long) As Long
+Private Function pvIntWidth(ByVal lCol As Long, Optional ByVal bLoadedOnly As Boolean) As Long
     Dim lRow            As Long
     Dim decValue        As Variant
+    Dim vValue          As Variant
 
     '--- smallest RC6 width class holding every value: 1 (unsigned byte),
-    '--- 4 (int32) or 8 (int64); the PK column is always at least 4
+    '--- 4 (int32) or 8 (int64); the PK column is always at least 4; the
+    '--- changes blob keeps the load-time class (RC6 never widens it)
     If lCol = m_lAutoPkCol Then
         pvIntWidth = 4
     Else
         pvIntWidth = 1
     End If
     For lRow = 0 To m_lRecordCount - 1
-        If Not pvIsNullCell(m_aData(lCol, lRow)) Then
-            decValue = CDec(m_aData(lCol, lRow))
+        vValue = m_aData(lCol, lRow)
+        If bLoadedOnly And m_bWriteState Then
+            If m_aRowState(lRow) = ROW_NEW Then
+                vValue = Empty
+            ElseIf m_aDirty(lCol, lRow) Then
+                vValue = m_aOriginal(lCol, lRow)
+            End If
+        End If
+        If Not pvIsNullCell(vValue) Then
+            decValue = CDec(vValue)
             If decValue < 0 Or decValue > 255 Then
                 If decValue < -2147483648# Or decValue > 2147483647# Then
                     pvIntWidth = 8
