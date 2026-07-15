@@ -58,7 +58,7 @@ Public Function GetBlob(ByVal ParamIdxOneBased As Long) As Byte()
     lpValue = pvValue(ParamIdxOneBased)
     lLen = stub_sqlite3_value_bytes(lpValue)
     If lLen > 0 Then
-        ReDim baRetVal(0 To lLen - 1)
+        ReDim baRetVal(0 To lLen - 1) As Byte
         Call CopyMemory(baRetVal(0), ByVal stub_sqlite3_value_blob(lpValue), lLen)
     End If
     GetBlob = baRetVal

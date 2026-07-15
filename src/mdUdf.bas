@@ -221,9 +221,9 @@ Private Function pvAllocSlot(ByVal hDb As LongPtr) As Long
         End If
     Next
     If m_lRegCount = 0 Then
-        ReDim m_aRegs(1 To 16)
+        ReDim m_aRegs(1 To 16) As UDFREG
     ElseIf m_lRegCount >= UBound(m_aRegs) Then
-        ReDim Preserve m_aRegs(1 To 2 * m_lRegCount)
+        ReDim Preserve m_aRegs(1 To 2 * m_lRegCount) As UDFREG
     End If
     m_lRegCount = m_lRegCount + 1
     m_aRegs(m_lRegCount).hDb = hDb

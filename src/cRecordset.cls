@@ -284,16 +284,16 @@ Public Sub Delete()
     '--- a pending insert just vanishes; existing rows queue a DELETE and keep
     '--- a full snapshot so ResetChanges can restore them faithfully
     If m_aRowState(m_lCurRow) <> ROW_NEW Then
-        ReDim aEntry(0 To 4)
-        ReDim aRow(0 To m_lFieldCount - 1)
-        ReDim aOrig(0 To m_lFieldCount - 1)
-        ReDim aDirty(0 To m_lFieldCount - 1)
+        ReDim aEntry(0 To 4) As Variant
+        ReDim aRow(0 To m_lFieldCount - 1) As Variant
+        ReDim aOrig(0 To m_lFieldCount - 1) As Variant
+        ReDim aDirty(0 To m_lFieldCount - 1) As Boolean
         For lCol = 0 To m_lFieldCount - 1
             aRow(lCol) = m_aData(lCol, m_lCurRow)
             aOrig(lCol) = m_aOriginal(lCol, m_lCurRow)
             aDirty(lCol) = m_aDirty(lCol, m_lCurRow)
         Next
-        ReDim aPk(0 To m_lPkCount - 1)
+        ReDim aPk(0 To m_lPkCount - 1) As Variant
         For lPkIdx = 0 To m_lPkCount - 1
             aPk(lPkIdx) = pvPkWhereValue(m_lCurRow, lPkIdx)
         Next
@@ -445,14 +445,14 @@ Public Function GetRows(Optional ByVal RowCount As Long = -1, Optional ByVal Sta
     End If
     '--- default orientation matches ADO GetRows: (fieldIdx, rowIdx)
     If TransPosed Then
-        ReDim aOut(0 To lNumRows - 1, 0 To lNumCols - 1)
+        ReDim aOut(0 To lNumRows - 1, 0 To lNumCols - 1) As Variant
         For lRow = 0 To lNumRows - 1
             For lCol = 0 To lNumCols - 1
                 aOut(lRow, lCol) = m_aData(aCol(lCol), lFirst + lRow)
             Next
         Next
     Else
-        ReDim aOut(0 To lNumCols - 1, 0 To lNumRows - 1)
+        ReDim aOut(0 To lNumCols - 1, 0 To lNumRows - 1) As Variant
         For lCol = 0 To lNumCols - 1
             For lRow = 0 To lNumRows - 1
                 aOut(lCol, lRow) = m_aData(aCol(lCol), lFirst + lRow)
@@ -732,11 +732,11 @@ Private Sub pvMaterialize(ByVal hStmt As LongPtr, Optional ByVal bFinalize As Bo
     m_lFieldCount = stub_sqlite3_column_count(hStmt)
     lCap = 16
     If m_lFieldCount > 0 Then
-        ReDim m_aFieldName(0 To m_lFieldCount - 1)
+        ReDim m_aFieldName(0 To m_lFieldCount - 1) As String
         For lCol = 0 To m_lFieldCount - 1
             m_aFieldName(lCol) = FromUtf8Ptr(stub_sqlite3_column_name(hStmt, lCol))
         Next
-        ReDim m_aData(0 To m_lFieldCount - 1, 0 To lCap - 1)
+        ReDim m_aData(0 To m_lFieldCount - 1, 0 To lCap - 1) As Variant
     End If
     pvCaptureColumnMeta hStmt
     pvAnalyzeUpdatable
@@ -749,7 +749,7 @@ Private Sub pvMaterialize(ByVal hStmt As LongPtr, Optional ByVal bFinalize As Bo
         If m_lFieldCount > 0 Then
             If lRow > UBound(m_aData, 2) Then
                 lCap = lCap * 2
-                ReDim Preserve m_aData(0 To m_lFieldCount - 1, 0 To lCap - 1)
+                ReDim Preserve m_aData(0 To m_lFieldCount - 1, 0 To lCap - 1) As Variant
             End If
             For lCol = 0 To m_lFieldCount - 1
                 m_aData(lCol, lRow) = ReadColumnValue(hStmt, lCol)
@@ -833,14 +833,14 @@ Private Function pvResolveColumns(sList As String, lNumCols As Long) As Long()
         If m_lFieldCount = 0 Then
             Exit Function
         End If
-        ReDim aRet(0 To m_lFieldCount - 1)
+        ReDim aRet(0 To m_lFieldCount - 1) As Long
         For lIdx = 0 To m_lFieldCount - 1
             aRet(lIdx) = lIdx
         Next
         lNumCols = m_lFieldCount
     Else
         aName = Split(sList, ",")
-        ReDim aRet(0 To UBound(aName))
+        ReDim aRet(0 To UBound(aName)) As Long
         For lIdx = 0 To UBound(aName)
             lCol = frFieldIndex(Trim$(aName(lIdx)))
             If lCol >= 0 Then
@@ -851,7 +851,7 @@ Private Function pvResolveColumns(sList As String, lNumCols As Long) As Long()
         If lNumCols = 0 Then
             Exit Function
         End If
-        ReDim Preserve aRet(0 To lNumCols - 1)
+        ReDim Preserve aRet(0 To lNumCols - 1) As Long
     End If
     pvResolveColumns = aRet
 End Function
@@ -862,10 +862,10 @@ Private Sub pvCaptureColumnMeta(ByVal hStmt As LongPtr)
     If m_lFieldCount = 0 Then
         Exit Sub
     End If
-    ReDim m_aOrigColumn(0 To m_lFieldCount - 1)
-    ReDim m_aOrigTable(0 To m_lFieldCount - 1)
-    ReDim m_aOrigDb(0 To m_lFieldCount - 1)
-    ReDim m_aDeclType(0 To m_lFieldCount - 1)
+    ReDim m_aOrigColumn(0 To m_lFieldCount - 1) As String
+    ReDim m_aOrigTable(0 To m_lFieldCount - 1) As String
+    ReDim m_aOrigDb(0 To m_lFieldCount - 1) As String
+    ReDim m_aDeclType(0 To m_lFieldCount - 1) As String
     For lCol = 0 To m_lFieldCount - 1
         m_aOrigColumn(lCol) = FromUtf8Ptr(stub_sqlite3_column_origin_name(hStmt, lCol))
         m_aOrigTable(lCol) = FromUtf8Ptr(stub_sqlite3_column_table_name(hStmt, lCol))
@@ -906,7 +906,7 @@ Private Sub pvAnalyzeUpdatable()
     If m_lPkCount = 0 Then
         Exit Sub
     End If
-    ReDim m_aPkCols(0 To m_lPkCount - 1)
+    ReDim m_aPkCols(0 To m_lPkCount - 1) As Long
     For lPkIdx = 0 To m_lPkCount - 1
         bFound = False
         For lCol = 0 To m_lFieldCount - 1
@@ -937,16 +937,16 @@ Private Function pvGetPkColumns(sSinglePkType As String) As String()
     Dim lPk             As Long
     Dim lIdx            As Long
 
-    ReDim aName(0 To 3)
-    ReDim aPos(0 To 3)
+    ReDim aName(0 To 3) As String
+    ReDim aPos(0 To 3) As Long
     hStmt = PrepareStatement(m_oConnection, "PRAGMA " & QuoteIdentifier(m_sOrigDb) & ".table_info(" & QuoteIdentifier(m_sOrigTable) & ")")
     Do While stub_sqlite3_step(hStmt) = SQLITE_ROW
         '--- table_info columns: cid, name, type, notnull, dflt_value, pk
         lPk = stub_sqlite3_column_int(hStmt, 5)
         If lPk > 0 Then
             If lCount > UBound(aName) Then
-                ReDim Preserve aName(0 To 2 * lCount)
-                ReDim Preserve aPos(0 To 2 * lCount)
+                ReDim Preserve aName(0 To 2 * lCount) As String
+                ReDim Preserve aPos(0 To 2 * lCount) As Long
             End If
             aName(lCount) = FromUtf8Ptr(stub_sqlite3_column_text(hStmt, 1))
             aPos(lCount) = lPk
@@ -959,7 +959,7 @@ Private Function pvGetPkColumns(sSinglePkType As String) As String()
     Call stub_sqlite3_finalize(hStmt)
     m_lPkCount = lCount
     If lCount > 0 Then
-        ReDim aRet(0 To lCount - 1)
+        ReDim aRet(0 To lCount - 1) As String
         For lIdx = 0 To lCount - 1
             aRet(aPos(lIdx) - 1) = aName(lIdx)
         Next
@@ -969,9 +969,9 @@ End Function
 
 Private Sub pvEnsureWriteState()
     If Not m_bWriteState Then
-        ReDim m_aOriginal(0 To m_lFieldCount - 1, 0 To UBound(m_aData, 2))
-        ReDim m_aDirty(0 To m_lFieldCount - 1, 0 To UBound(m_aData, 2))
-        ReDim m_aRowState(0 To UBound(m_aData, 2))
+        ReDim m_aOriginal(0 To m_lFieldCount - 1, 0 To UBound(m_aData, 2)) As Variant
+        ReDim m_aDirty(0 To m_lFieldCount - 1, 0 To UBound(m_aData, 2)) As Boolean
+        ReDim m_aRowState(0 To UBound(m_aData, 2)) As Long
         Set m_cDeleted = New VBA.Collection
         m_bWriteState = True
     End If
@@ -985,11 +985,11 @@ Private Sub pvEnsureRowCapacity(ByVal lRows As Long)
         Do
             lCap = lCap * 2
         Loop While lRows > lCap
-        ReDim Preserve m_aData(0 To m_lFieldCount - 1, 0 To lCap - 1)
+        ReDim Preserve m_aData(0 To m_lFieldCount - 1, 0 To lCap - 1) As Variant
         If m_bWriteState Then
-            ReDim Preserve m_aOriginal(0 To m_lFieldCount - 1, 0 To lCap - 1)
-            ReDim Preserve m_aDirty(0 To m_lFieldCount - 1, 0 To lCap - 1)
-            ReDim Preserve m_aRowState(0 To lCap - 1)
+            ReDim Preserve m_aOriginal(0 To m_lFieldCount - 1, 0 To lCap - 1) As Variant
+            ReDim Preserve m_aDirty(0 To m_lFieldCount - 1, 0 To lCap - 1) As Boolean
+            ReDim Preserve m_aRowState(0 To lCap - 1) As Long
         End If
     End If
 End Sub
@@ -1053,7 +1053,7 @@ Private Sub pvBatchUpdate(ByVal lRow As Long)
     Dim lCol            As Long
     Dim lPkIdx          As Long
 
-    ReDim aParams(0 To m_lFieldCount + m_lPkCount - 1)
+    ReDim aParams(0 To m_lFieldCount + m_lPkCount - 1) As Variant
     For lCol = 0 To m_lFieldCount - 1
         If m_aDirty(lCol, lRow) And Len(m_aOrigColumn(lCol)) > 0 Then
             If Len(sSet) > 0 Then
@@ -1071,7 +1071,7 @@ Private Sub pvBatchUpdate(ByVal lRow As Long)
         aParams(lCount) = pvPkWhereValue(lRow, lPkIdx)
         lCount = lCount + 1
     Next
-    ReDim Preserve aParams(0 To lCount - 1)
+    ReDim Preserve aParams(0 To lCount - 1) As Variant
     pvExecParams "UPDATE " & pvQualifiedTable() & " SET " & sSet & " WHERE " & pvPkWhereClause(), aParams
 End Sub
 
@@ -1082,7 +1082,7 @@ Private Sub pvBatchInsert(ByVal lRow As Long)
     Dim lCount          As Long
     Dim lCol            As Long
 
-    ReDim aParams(0 To m_lFieldCount - 1)
+    ReDim aParams(0 To m_lFieldCount - 1) As Variant
     For lCol = 0 To m_lFieldCount - 1
         If Len(m_aOrigColumn(lCol)) > 0 Then
             If lCount > 0 Then
@@ -1098,7 +1098,7 @@ Private Sub pvBatchInsert(ByVal lRow As Long)
     If lCount = 0 Then
         Exit Sub
     End If
-    ReDim Preserve aParams(0 To lCount - 1)
+    ReDim Preserve aParams(0 To lCount - 1) As Variant
     pvExecParams "INSERT INTO " & pvQualifiedTable() & " (" & sCols & ") VALUES (" & sVals & ")", aParams
     '--- INTEGER PRIMARY KEY auto-assigned on NULL insert: backfill the cell
     If m_lAutoPkCol >= 0 Then
@@ -1204,7 +1204,7 @@ Private Sub pvApplySort(Optional ByVal bRaiseMove As Boolean = True)
     If lKeys = 0 Then
         Exit Sub
     End If
-    ReDim aIdx(0 To m_lRecordCount - 1)
+    ReDim aIdx(0 To m_lRecordCount - 1) As Long
     For lRow = 0 To m_lRecordCount - 1
         aIdx(lRow) = lRow
     Next
@@ -1220,8 +1220,8 @@ Private Sub pvParseSort(aCols() As Long, aDesc() As Boolean, lKeys As Long)
     Dim lPos            As Long
 
     aTok = Split(m_sSort, ",")
-    ReDim aCols(0 To UBound(aTok))
-    ReDim aDesc(0 To UBound(aTok))
+    ReDim aCols(0 To UBound(aTok)) As Long
+    ReDim aDesc(0 To UBound(aTok)) As Boolean
     lKeys = 0
     For lIdx = 0 To UBound(aTok)
         sName = Trim$(aTok(lIdx))
@@ -1310,7 +1310,7 @@ Private Sub pvPermuteRows(aIdx() As Long, Optional ByVal bRaiseMove As Boolean =
     Dim lCol            As Long
     Dim lNewCur         As Long
 
-    ReDim aDataNew(0 To m_lFieldCount - 1, 0 To UBound(m_aData, 2))
+    ReDim aDataNew(0 To m_lFieldCount - 1, 0 To UBound(m_aData, 2)) As Variant
     lNewCur = m_lCurRow
     For lRow = 0 To m_lRecordCount - 1
         For lCol = 0 To m_lFieldCount - 1
@@ -1322,9 +1322,9 @@ Private Sub pvPermuteRows(aIdx() As Long, Optional ByVal bRaiseMove As Boolean =
     Next
     m_aData = aDataNew
     If m_bWriteState Then
-        ReDim aOriginalNew(0 To m_lFieldCount - 1, 0 To UBound(m_aOriginal, 2))
-        ReDim aDirtyNew(0 To m_lFieldCount - 1, 0 To UBound(m_aDirty, 2))
-        ReDim aStateNew(0 To UBound(m_aRowState))
+        ReDim aOriginalNew(0 To m_lFieldCount - 1, 0 To UBound(m_aOriginal, 2)) As Variant
+        ReDim aDirtyNew(0 To m_lFieldCount - 1, 0 To UBound(m_aDirty, 2)) As Boolean
+        ReDim aStateNew(0 To UBound(m_aRowState)) As Long
         For lRow = 0 To m_lRecordCount - 1
             For lCol = 0 To m_lFieldCount - 1
                 aOriginalNew(lCol, lRow) = m_aOriginal(lCol, aIdx(lRow))
@@ -1596,7 +1596,7 @@ Private Function pvContentWrite() As Byte()
     Dim lTables         As Long
 
     lRows = m_lRecordCount
-    ReDim baOut(0 To 1023)
+    ReDim baOut(0 To 1023) As Byte
     '--- header
     pvPutLong baOut, lPos, 0                        '--- cbTotal (patched below)
     pvPutLong baOut, lPos, lRows
@@ -1630,7 +1630,7 @@ Private Function pvContentWrite() As Byte()
     '--- distinct origin tables in first-appearance order (aTabCol holds the
     '--- first column index of each table; used for the per-field table index
     '--- and the DML-template tail)
-    ReDim aTabCol(0 To m_lFieldCount)
+    ReDim aTabCol(0 To m_lFieldCount) As Long
     lTables = 0
     For lCol = 0 To m_lFieldCount - 1
         If Len(m_aOrigTable(lCol)) > 0 Then
@@ -1779,7 +1779,7 @@ Private Function pvContentWrite() As Byte()
     If (lPos And 1) <> 0 Then
         pvPutZeros baOut, lPos, 1
     End If
-    ReDim Preserve baOut(0 To lPos - 1)
+    ReDim Preserve baOut(0 To lPos - 1) As Byte
     Call CopyMemory(baOut(0), lPos, 4)
     pvContentWrite = baOut
 End Function
@@ -1818,13 +1818,13 @@ Private Sub pvContentRead(baContent() As Byte)
     m_sSql = pvGetStr(baContent, lPos)
     m_lFieldCount = pvGetLong(baContent, lPos)
     If m_lFieldCount > 0 Then
-        ReDim m_aFieldName(0 To m_lFieldCount - 1)
-        ReDim m_aOrigColumn(0 To m_lFieldCount - 1)
-        ReDim m_aOrigTable(0 To m_lFieldCount - 1)
-        ReDim m_aOrigDb(0 To m_lFieldCount - 1)
-        ReDim m_aDeclType(0 To m_lFieldCount - 1)
-        ReDim m_aColSchema(0 To m_lFieldCount - 1)
-        ReDim m_aData(0 To m_lFieldCount - 1, 0 To IIf(lRows > 16, lRows, 16) - 1)
+        ReDim m_aFieldName(0 To m_lFieldCount - 1) As String
+        ReDim m_aOrigColumn(0 To m_lFieldCount - 1) As String
+        ReDim m_aOrigTable(0 To m_lFieldCount - 1) As String
+        ReDim m_aOrigDb(0 To m_lFieldCount - 1) As String
+        ReDim m_aDeclType(0 To m_lFieldCount - 1) As String
+        ReDim m_aColSchema(0 To m_lFieldCount - 1) As cColumn
+        ReDim m_aData(0 To m_lFieldCount - 1, 0 To IIf(lRows > 16, lRows, 16) - 1) As Variant
     End If
     For lCol = 0 To m_lFieldCount - 1
         m_aOrigDb(lCol) = pvGetStr(baContent, lPos)
@@ -1856,7 +1856,7 @@ Private Sub pvContentRead(baContent() As Byte)
         End If
         '--- per-row not-null flags
         lCount = pvGetLong(baContent, lPos)
-        ReDim aFlags(0 To IIf(lCount > 0, lCount, 1) - 1)
+        ReDim aFlags(0 To IIf(lCount > 0, lCount, 1) - 1) As Byte
         For lRow = 0 To lCount - 1
             aFlags(lRow) = pvGetByte(baContent, lPos)
         Next
@@ -1888,12 +1888,12 @@ Private Sub pvContentRead(baContent() As Byte)
             pvGetLong baContent, lPos
         Case Else
             lCount = pvGetLong(baContent, lPos)
-            ReDim baText(0 To IIf(lCount > 0, lCount, 1) - 1)
+            ReDim baText(0 To IIf(lCount > 0, lCount, 1) - 1) As Byte
             For lRow = 0 To lCount - 1
                 baText(lRow) = pvGetByte(baContent, lPos)
             Next
             lCount = pvGetLong(baContent, lPos) \ 4
-            ReDim aOffs(0 To IIf(lCount > 0, lCount, 1) - 1)
+            ReDim aOffs(0 To IIf(lCount > 0, lCount, 1) - 1) As Long
             For lRow = 0 To lCount - 1
                 aOffs(lRow) = pvGetLong(baContent, lPos)
             Next
@@ -1951,7 +1951,7 @@ Private Sub pvAnalyzeFromSchema()
     If Len(m_sOrigDb) = 0 Then
         m_sOrigDb = "main"
     End If
-    ReDim m_aPkCols(0 To m_lFieldCount - 1)
+    ReDim m_aPkCols(0 To m_lFieldCount - 1) As Long
     For lCol = 0 To m_lFieldCount - 1
         If Not m_aColSchema(lCol) Is Nothing Then
             If m_aColSchema(lCol).PrimaryKey Then
@@ -1963,7 +1963,7 @@ Private Sub pvAnalyzeFromSchema()
     If m_lPkCount = 0 Then
         Exit Sub
     End If
-    ReDim Preserve m_aPkCols(0 To m_lPkCount - 1)
+    ReDim Preserve m_aPkCols(0 To m_lPkCount - 1) As Long
     If m_lPkCount = 1 Then
         If pvDeclTypeCode(m_aDeclType(m_aPkCols(0))) = 1 Then
             m_lAutoPkCol = m_aPkCols(0)
@@ -1997,7 +1997,7 @@ Private Function pvContentKeyCols(sTable As String, sDb As String, aKey() As Lon
     Dim bIsPk           As Boolean
     Dim oColumn         As cColumn
 
-    ReDim aKey(0 To m_lFieldCount - 1)
+    ReDim aKey(0 To m_lFieldCount - 1) As Long
     '--- collect pk column names of the origin table
     Set cPkNames = New VBA.Collection
     If Not m_oConnection Is Nothing Then
@@ -2175,7 +2175,7 @@ Private Function pvSliceCell(baText() As Byte, ByVal lStart As Long, ByVal lLen 
     Dim baCell()        As Byte
 
     If lLen > 0 Then
-        ReDim baCell(0 To lLen - 1)
+        ReDim baCell(0 To lLen - 1) As Byte
         Call CopyMemory(baCell(0), baText(lStart), lLen)
     End If
     If lType = 4 Then
@@ -2319,7 +2319,7 @@ Private Sub pvEnsureBuf(baBuf() As Byte, ByVal lNeeded As Long)
         Do
             lCap = lCap * 2
         Loop While lNeeded > lCap
-        ReDim Preserve baBuf(0 To lCap - 1)
+        ReDim Preserve baBuf(0 To lCap - 1) As Byte
     End If
 End Sub
 

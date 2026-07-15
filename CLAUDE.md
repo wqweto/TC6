@@ -33,3 +33,4 @@
 - Within properties/methods order by visibility: public, friend, private
 - Use `pv` prefix for private procedures and `fr` for friend ones
 - Use `lIdx`, `lJdx`, etc. instead of single-letter index variable `i`, `j`, etc.
+- ReDim uses explicit data-type i.e. `ReDim aName(0 To 100) As String`

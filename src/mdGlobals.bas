@@ -123,7 +123,7 @@ Public Function BindTextValue(ByVal hStmt As LongPtr, ByVal lIndex As Long, sTex
     baBuf = ToUtf8Array(sText)
     lLen = pvArrayByteLen(baBuf)
     If lLen = 0 Then
-        ReDim baBuf(0 To 0)
+        ReDim baBuf(0 To 0) As Byte
     End If
     BindTextValue = stub_sqlite3_bind_text(hStmt, lIndex, VarPtr(baBuf(0)), lLen, SQLITE_TRANSIENT)
 End Function
@@ -232,7 +232,7 @@ Public Sub CreateTableFromRecordset(oCnn As cConnection, ByVal oSrc As cRecordse
     End If
     oCnn.Execute "CREATE " & IIf(bTempTable, "TEMP ", vbNullString) & "TABLE " & QuoteIdentifier(sTable) & " (" & sDefs & ")"
     If oSrc.RecordCount > 0 Then
-        ReDim aParams(0 To oSrc.Fields.Count - 1)
+        ReDim aParams(0 To oSrc.Fields.Count - 1) As Variant
         For lRow = 0 To oSrc.RecordCount - 1
             For lCol = 0 To oSrc.Fields.Count - 1
                 aParams(lCol) = oSrc.ValueMatrix(lRow, lCol)
@@ -309,7 +309,7 @@ Private Function pvColumnBlob(ByVal hStmt As LongPtr, ByVal lCol As Long) As Var
     lLen = stub_sqlite3_column_bytes(hStmt, lCol)
     If lLen > 0 Then
         lPtr = stub_sqlite3_column_blob(hStmt, lCol)
-        ReDim baBuf(0 To lLen - 1)
+        ReDim baBuf(0 To lLen - 1) As Byte
         Call CopyMemory(baBuf(0), ByVal lPtr, lLen)
         pvColumnBlob = baBuf
     Else
