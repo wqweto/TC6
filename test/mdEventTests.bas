@@ -2,7 +2,7 @@ Attribute VB_Name = "mdEventTests"
 '=========================================================================
 ' mdEventTests - event timing tests for cRecordset/cConnection
 '
-' Every expected trace below was captured from the original RC6.dll 3.42
+' Every expected trace below was captured from the original RC6.dll 6.0.15
 ' with a VBScript event sink (scenarios driven identically against both
 ' engines), so these tests pin TC6's event timing to RC6's:
 '   - Move/AddNew/Delete args are 0-based row indices, -1 = BOF, -2 = EOF
@@ -278,7 +278,7 @@ Private Sub Test_TxnEvents()
     oCnn.RollbackTrans
     AssertEqStr oSink.Trace, "CommitTransComplete;RollbackTransComplete", "unnamed txn events"
     '--- named savepoints: TC6 implements the real SAVEPOINT semantics the
-    '--- RC6 interface declares; RC6 3.42 ignores the names (counter-only
+    '--- RC6 interface declares; RC6 6.0.15 ignores the names (counter-only
     '--- nesting, savepoint events never fire) - documented divergence
     oSink.Clear
     oCnn.BeginTrans

@@ -616,7 +616,7 @@ Private Sub Test_ContentRC6Compat()
     pvCompatCase "int32_width4", "CREATE TABLE t(v INTEGER)", _
         "INSERT INTO t VALUES(-1), (100), (70000)", "SELECT v FROM t"
     '--- NB: values like 1e-300 parse 1 ULP apart in SQLite 3.42 (RC6) vs
-    '--- winsqlite3 3.51, so only binary-exact literals are compared here
+    '--- newer engines, so only binary-exact literals are compared here
     pvCompatCase "reals", "CREATE TABLE t(v REAL)", _
         "INSERT INTO t VALUES(0.0), (-1.5), (1e300), (0.125)", "SELECT v FROM t"
     pvCompatCase "text_utf8", "CREATE TABLE t(v TEXT)", _
@@ -1668,7 +1668,7 @@ EH:
 End Sub
 
 '--- these two tests pin the FINAL contract, matching original RC6 behavior
-'--- (verified against RC6.dll 3.42.0): an orphaned/stale cField raises
+'--- (verified against RC6.dll 6.0.15): an orphaned/stale cField raises
 '--- error 91 on every recordset-dependent member (a cRowset split that
 '--- would keep it readable was considered and rejected)
 Private Sub Test_FieldOutlivesRecordset()

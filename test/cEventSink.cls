@@ -24,6 +24,8 @@ Private WithEvents m_oRs             As cRecordset
 Attribute m_oRs.VB_VarHelpID = -1
 Private WithEvents m_oCnn            As cConnection
 Attribute m_oCnn.VB_VarHelpID = -1
+Private WithEvents m_oConv           As cConverter
+Attribute m_oConv.VB_VarHelpID = -1
 Private m_sTrace                     As String
 
 Public Property Get Trace() As String
@@ -36,6 +38,10 @@ End Sub
 
 Public Sub AttachConnection(oCnn As cConnection)
     Set m_oCnn = oCnn
+End Sub
+
+Public Sub AttachConverter(oConv As cConverter)
+    Set m_oConv = oConv
 End Sub
 
 Public Sub Clear()
@@ -91,4 +97,16 @@ End Sub
 
 Private Sub m_oCnn_RollbackToSavePointComplete(SavePointName As String)
     pvAppend "RollbackToSavePoint(" & SavePointName & ")"
+End Sub
+
+Private Sub m_oConv_SchemaProgress(ByVal TableName As String, ByVal TablesCount As Long, ByVal TablesCreated As Long)
+    pvAppend "SchemaProgress(" & TableName & "," & TablesCount & "," & TablesCreated & ")"
+End Sub
+
+Private Sub m_oConv_InsertProgress(ByVal TableName As String, ByVal RecordCount As Long, ByVal RecordsInserted As Long)
+    pvAppend "InsertProgress(" & TableName & "," & RecordCount & "," & RecordsInserted & ")"
+End Sub
+
+Private Sub m_oConv_IndexProgress(ByVal TableName As String, ByVal IndexName As String, ByVal IndexesCount As Long, ByVal IndexesCreated As Long)
+    pvAppend "IndexProgress(" & TableName & "," & IndexName & "," & IndexesCount & "," & IndexesCreated & ")"
 End Sub

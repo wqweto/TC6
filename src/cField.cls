@@ -20,7 +20,7 @@ Attribute VB_Exposed = True
 ' NOTE: the weak m_pRs pointer is intentional and final - it matches the
 ' original RC6, where every recordset-dependent member of an orphaned
 ' field raises error 91 while IndexInFieldList keeps working (verified
-' against RC6.dll 3.42.0); a strong-ref cRowset split was considered and
+' against RC6.dll 6.0.15); a strong-ref cRowset split was considered and
 ' rejected - not going to implement.
 '=========================================================================
 Option Explicit

@@ -197,6 +197,161 @@ Public Function QuoteString(sText As String) As String
     QuoteString = "'" & Replace(sText, "'", "''") & "'"
 End Function
 
+Public Function AdoTypeToDeclType(ByVal lAdoType As Long, Optional ByVal lCharMaxLen As Long) As String
+    Const adSmallInt                        As Long = 2
+    Const adInteger                         As Long = 3
+    Const adSingle                          As Long = 4
+    Const adDouble                          As Long = 5
+    Const adCurrency                        As Long = 6
+    Const adDate                            As Long = 7
+    Const adBoolean                         As Long = 11
+    Const adDecimal                         As Long = 14
+    Const adTinyInt                         As Long = 16
+    Const adUnsignedTinyInt                 As Long = 17
+    Const adUnsignedSmallInt                As Long = 18
+    Const adUnsignedInt                     As Long = 19
+    Const adBigInt                          As Long = 20
+    Const adUnsignedBigInt                  As Long = 21
+    Const adBinary                          As Long = 128
+    Const adChar                            As Long = 129
+    Const adWChar                           As Long = 130
+    Const adNumeric                         As Long = 131
+    Const adDBDate                          As Long = 133
+    Const adDBTime                          As Long = 134
+    Const adDBTimeStamp                     As Long = 135
+    Const adVarNumeric                      As Long = 139
+    Const adVarChar                         As Long = 200
+    Const adVarWChar                        As Long = 202
+    Const adVarBinary                       As Long = 204
+    Const adLongVarBinary                   As Long = 205
+
+    '--- RC6 mapping (verified against RC6.dll 6.0.15 via the converter
+    '--- tests); column sizes appear only on the converter path, which
+    '--- passes CHARACTER_MAXIMUM_LENGTH from the columns schema rowset
+    Select Case lAdoType
+    Case adSmallInt, adInteger, adTinyInt, adUnsignedTinyInt, adUnsignedSmallInt, adUnsignedInt, adBigInt, adUnsignedBigInt
+        AdoTypeToDeclType = "INTEGER"
+    Case adBoolean
+        AdoTypeToDeclType = "BIT"
+    Case adSingle, adDouble, adCurrency, adDecimal, adNumeric, adVarNumeric
+        AdoTypeToDeclType = "REAL"
+    Case adDate, adDBDate, adDBTime, adDBTimeStamp
+        AdoTypeToDeclType = "DATE"
+    Case adBinary, adVarBinary, adLongVarBinary
+        AdoTypeToDeclType = "BLOB"
+    Case adChar, adWChar, adVarChar, adVarWChar
+        If lCharMaxLen > 0 Then
+            AdoTypeToDeclType = "TEXT(" & lCharMaxLen & ")"
+        Else
+            AdoTypeToDeclType = "TEXT"
+        End If
+    Case Else
+        AdoTypeToDeclType = "TEXT"
+    End Select
+End Function
+
+Public Sub CopyAdoRsToTable(oCnn As cConnection, sTable As String, oAdoRs As Object, vDataTypes As Variant, ByVal bNoCase As Boolean, cPkNames As VBA.Collection, Optional oProgress As cConverter)
+    Const adFldKeyColumn                    As Long = &H8000&
+    Dim oFld            As Object
+    Dim lCol            As Long
+    Dim lCount          As Long
+    Dim sDefs           As String
+    Dim sVals           As String
+    Dim sType           As String
+    Dim sPk             As String
+    Dim bIsPk           As Boolean
+    Dim hStmt           As LongPtr
+    Dim vValue          As Variant
+    Dim lRow            As Long
+    Dim lTotal          As Long
+    Dim vName           As Variant
+
+    lCount = oAdoRs.Fields.Count
+    '--- pk columns: explicit list, else the adFldKeyColumn field attribute
+    If cPkNames Is Nothing Then
+        Set cPkNames = New VBA.Collection
+        For lCol = 0 To lCount - 1
+            If (oAdoRs.Fields(lCol).Attributes And adFldKeyColumn) <> 0 Then
+                cPkNames.Add oAdoRs.Fields(lCol).Name
+            End If
+        Next
+    End If
+    For lCol = 0 To lCount - 1
+        Set oFld = oAdoRs.Fields(lCol)
+        If Len(sDefs) > 0 Then
+            sDefs = sDefs & ", "
+            sVals = sVals & ", "
+        End If
+        sType = vbNullString
+        If IsArray(vDataTypes) Then
+            sType = vDataTypes(lCol)
+        End If
+        If Len(sType) = 0 Then
+            sType = AdoTypeToDeclType(oFld.Type)
+        End If
+        bIsPk = False
+        For Each vName In cPkNames
+            If StrComp(CStr(vName), oFld.Name, vbTextCompare) = 0 Then
+                bIsPk = True
+            End If
+        Next
+        '--- NOT NULL comes only through vDataTypes (the converter appends it
+        '--- from IS_NULLABLE; plain CreateTableFromADORs never emits it)
+        sDefs = sDefs & "[" & oFld.Name & "] " & sType
+        If bIsPk And cPkNames.Count = 1 Then
+            sDefs = sDefs & " PRIMARY KEY"
+        End If
+        If Left$(sType, 4) = "TEXT" And bNoCase Then
+            sDefs = sDefs & " COLLATE NOCASE"
+        End If
+        sVals = sVals & "?"
+    Next
+    If cPkNames.Count > 1 Then
+        For Each vName In cPkNames
+            If Len(sPk) > 0 Then
+                sPk = sPk & ", "
+            End If
+            sPk = sPk & "[" & vName & "]"
+        Next
+        sDefs = sDefs & ", PRIMARY KEY (" & sPk & ")"
+    End If
+    '--- RC6 quirk: a leading space after the paren when the table has no pk
+    oCnn.Execute "CREATE TABLE [" & sTable & "] (" & IIf(cPkNames.Count = 0, " ", vbNullString) & sDefs & ")"
+    '--- copy the rows with a single prepared INSERT
+    If oAdoRs.EOF And oAdoRs.BOF Then
+        Exit Sub
+    End If
+    On Error Resume Next
+    lTotal = oAdoRs.RecordCount
+    On Error GoTo 0
+    hStmt = PrepareStatement(oCnn, "INSERT INTO [" & sTable & "] VALUES (" & sVals & ")")
+    On Error GoTo EH
+    oAdoRs.MoveFirst
+    Do While Not oAdoRs.EOF
+        For lCol = 0 To lCount - 1
+            vValue = oAdoRs.Fields(lCol).Value
+            If VarType(vValue) = vbDate Then
+                vValue = Format$(vValue, "yyyy-mm-dd hh:nn:ss")
+            End If
+            Call BindVariant(hStmt, lCol + 1, vValue)
+        Next
+        If stub_sqlite3_step(hStmt) <> SQLITE_DONE Then
+            Err.Raise vbObjectError, "CopyAdoRsToTable", oCnn.LastDBError()
+        End If
+        Call stub_sqlite3_reset(hStmt)
+        lRow = lRow + 1
+        If Not oProgress Is Nothing Then
+            oProgress.frInsertProgress sTable, lTotal, lRow
+        End If
+        oAdoRs.MoveNext
+    Loop
+    Call stub_sqlite3_finalize(hStmt)
+    Exit Sub
+EH:
+    Call stub_sqlite3_finalize(hStmt)
+    Err.Raise Err.Number, Err.Source, Err.Description
+End Sub
+
 Public Sub CreateTableFromRecordset(oCnn As cConnection, ByVal oSrc As cRecordset, sTable As String, ByVal bTempTable As Boolean, ByVal bWithPrimaryKeys As Boolean)
     Dim oField          As cField
     Dim sDefs           As String
@@ -261,7 +416,7 @@ Public Function CreateUniqueID64() As Variant
     Dim cyLocal         As Currency
     Dim decId           As Variant
 
-    '--- RC6 format (verified against RC6.dll 3.42.0): local-time VB date
+    '--- RC6 format (verified against RC6.dll 6.0.15): local-time VB date
     '--- serial * 10^14, sub-ms precision from the system clock. FILETIME
     '--- read as Currency = milliseconds since 1601-01-01; 109205 days lie
     '--- between that epoch and the VB serial epoch (1899-12-30)

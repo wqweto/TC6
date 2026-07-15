@@ -102,7 +102,7 @@ Sourced from the outgoing (`[source]`) dispinterfaces in the IDL:
   `Reset`.
 - `cConverter`: `SchemaProgress`, `InsertProgress`, `IndexProgress`.
 
-### Event timing (probed against RC6 3.42, pinned by mdEventTests)
+### Event timing (probed against RC6 6.0.15, pinned by mdEventTests)
 
 Captured by driving identical scenarios against both engines with a
 VBScript event sink (probe scripts in the session scratchpad); TC6 matches
@@ -134,7 +134,7 @@ RC6 trace-for-trace:
 **Documented divergences** (deliberate, asserted as TC6 behavior in
 mdEventTests):
 
-- **Named savepoints**: RC6 3.42's `BeginTrans`/`CommitTrans`/
+- **Named savepoints**: RC6 6.0.15's `BeginTrans`/`CommitTrans`/
   `RollbackTrans` savepoint names are dead code — probed with data checks:
   nesting is a plain counter, a named `RollbackTrans` rolls back the whole
   transaction (`RollbackTransComplete`), an inner named `CommitTrans` is a
@@ -267,7 +267,7 @@ An **ActiveX DLL** (`Type=OleDll`, project name `TC6SQLiteTest`) that compiles
 public COM class, `cTestHost`, to drive the suite from PowerShell/VBScript. This
 is the single project going forward — the old `apitest` Std-EXE was removed (its
 API smoke-check is now covered by `cConnection.CreateAndInsert`). Current run:
-**8 tests / 33 checks, all PASS** against winsqlite3.dll 3.51.1.
+**8 tests / 33 checks, all PASS** against winsqlite3.dll.
 
 - [test/cTestHost.cls](test/cTestHost.cls) — public `MultiUse` class, the COM
   entry point. `RunAll([OutputFile])` and `RunTests([Filter],[OutputFile])`
@@ -351,7 +351,7 @@ type. `cTestHost` is `MultiUse`.
 - [x] ~~Split `cRecordset` into a facade over an internal `cRowset`~~ —
       **rejected, not going to implement.** The proposal (strong `cRowset`
       references, orphaned fields stay readable) would diverge from the
-      original: verified against RC6.dll 3.42.0 that an orphaned RC6 field
+      original: verified against RC6.dll 6.0.15 that an orphaned RC6 field
       raises exactly **err 91** on *every* recordset-dependent get/let
       (`Value`/`Name`/`ColumnType`/`ActualSize`/`Changed`/`OriginalValue`/
       `UnderlyingValue`/`Updateable`/…) while `IndexInFieldList` keeps
@@ -384,7 +384,7 @@ type. `cTestHost` is `MultiUse`.
       documented "name type" usage).
 - [x] `cConnection.CopyDatabase` — `sqlite3_backup_init/step(-1)/finish`
       into a fresh connection, optional `VACUUM`; the copy is independent.
-- [x] `UniqueID64` — format verified against RC6.dll 3.42.0: **local-time
+- [x] `UniqueID64` — format verified against RC6.dll 6.0.15: **local-time
       VB date serial × 10^14** (sub-ms bits from the high-res clock),
       returned as a **VT_I8 variant** (built by `mdGlobals.Int64Variant`
       via the Currency carrier; `BindVariant` accepts VT_I8 too).
@@ -438,9 +438,38 @@ type. `cTestHost` is `MultiUse`.
 - [x] `GetRowsWithHeaders` — GetRows plus a field-name header row/col at
       index 0 (index -1 with `HeaderAtIdxMinus1`, LBound -1); RowCount
       counts data rows only; TransPosed mirrors the shape.
-- [ ] `GetADORsFromContent` (ADO tail).
+- [x] ADO interop tail (all late-bound, no ADO reference; pinned against
+      RC6 6.0.15 by mdConverterTests):
+      - `cRecordset.GetADORsFromContent` — disconnected ADO recordset;
+        INTEGER pk → adInteger, INTEGER → adDecimal, TEXT →
+        adLongVarWChar, REAL → adDouble, BLOB → adLongVarBinary;
+        attributes `adFldUpdatable|adFldIsNullable` + `adFldFixed` for
+        numerics / `adFldLong` for text+blob / `adFldKeyColumn` for the
+        pk; DB NULLs surface as ADO Null; int64 as Decimal.
+        `cRecordset.DataSource` wraps the same recordset (RC6 returns a
+        non-IDispatch binding object — divergence).
+      - `cConnection.CreateTableFromADORs` — bracket-quoted CREATE TABLE
+        from ADO field types (`AdoTypeToDeclType`: ints → INTEGER,
+        boolean → BIT, floats/currency/decimal → REAL, dates → DATE,
+        binary → BLOB, text → TEXT); single pk inline, composite as a
+        table constraint; **no NOT NULL** on this path; RC6 quirk: a
+        leading space after the paren when the table has no pk. Dates
+        insert as `yyyy-mm-dd hh:nn:ss` text, booleans as 1/0.
+      - `cConverter.ConvertDatabase/ConvertIndexes` — tables via
+        `OpenSchema(adSchemaTables)`, pks via `adSchemaPrimaryKeys`,
+        decltypes from `adSchemaColumns` (which adds `TEXT(n)` sizes from
+        CHARACTER_MAXIMUM_LENGTH and ` NOT NULL` from IS_NULLABLE — the
+        recordset-only path has neither); indexes via `adSchemaIndexes`,
+        skipping pk indexes, named `[idx_<INDEX_NAME>]`. Progress events
+        fire per table/row/index (RC6's exact event timing is not
+        COM-observable — unverified). Storage-level compat pinned by
+        quote()-dumps of both engines' converted files.
+      - NB: RC6's recordset *reader* coerces values by decltype/width
+        (DATE → Date, BIT → Boolean, small non-pk INTEGER → Byte) — TC6
+        returns Long/String for these; divergence noted, revisit if
+        needed.
 
-## RC6 `Content` blob format (reverse-engineered, RC6.dll 3.42.0)
+## RC6 `Content` blob format (reverse-engineered, RC6.dll 6.0.15)
 
 Decoded by differential probing (vary one datum, diff the blobs; probe
 scripts in the session scratchpad). All numbers little-endian; strings are
@@ -492,9 +521,17 @@ real RC6.dll via COM.
 - **Events**: RC6 raises no events on `Content` Let (verified via
   `WScript.ConnectObject`); TC6 matches (no `QueryFinished`).
 
-NB: SQLite 3.42 (RC6) and winsqlite3 3.51 parse some decimal literals
+NB: SQLite 3.42 (RC6) and newer engines parse some decimal literals
 (e.g. `1e-300`) 1 ULP apart, so byte-compares must use binary-exact REAL
 test values.
+
+NB: engine versions (queried live via `SELECT sqlite_version()`): RC6.dll
+6.0.15 embeds **3.42.0**; the VBSQLite objects in [cobj/](cobj/)
+statically linked into the released TC6SQLite.dll are **3.51.1**. Those
+two are the fixed, compatibility-relevant engines — engine diffs are what
+surface test discrepancies. winsqlite3.dll (the dev/test path) is a
+moving target that changes with Windows servicing, so its version is
+deliberately not pinned anywhere.
 
 NB: `cConnection.CreateTableFromRsContent` hit a **VB6 codegen bug** —
 assigning a ByRef array *parameter* directly to a `Property Let` crashes at
@@ -573,7 +610,7 @@ First class fleshed out. A thin wrapper over the `stub_sqlite3_*` declares holdi
 `sqlite3*` handle (`m_hDb As LongPtr`) and a `VBA.Collection` savepoint stack.
 
 **Implemented and verified** (call sequences exercised at module level against
-winsqlite3.dll 3.51.1 — open/exec/pragma-scalar/savepoints/errmsg/rowid all
+winsqlite3.dll — open/exec/pragma-scalar/savepoints/errmsg/rowid all
 pass):
 
 - Lifecycle: `CreateNewDB`/`OpenDB` (`READWRITE|CREATE`), `OpenDBReadOnly`
@@ -722,7 +759,7 @@ by `cConnection.OpenRecordset`/`OpenSchema` (`frOpen`), or via the public
   `Terminate`) returns to baseline after a recordset goes out of scope.
   This weak-ref design is **final**: it matches the original RC6, where an
   orphaned field raises err 91 on every recordset-dependent member while
-  `IndexInFieldList` keeps working (verified against RC6.dll 3.42.0). A
+  `IndexInFieldList` keeps working (verified against RC6.dll 6.0.15). A
   facade + `cRowset` split with strong references was considered and
   rejected — it would diverge from RC6 by keeping orphaned fields readable.
 - **Batched write surface**: opening a recordset analyses updatability —

@@ -29,7 +29,7 @@ Attribute VB_Exposed = True
 ' NOTE: a facade-over-cRowset split (strong references, orphaned fields
 ' stay readable) was considered and REJECTED - not going to implement. The
 ' original RC6 raises error 91 on every recordset-dependent cField member
-' once the recordset is gone (verified against RC6.dll 3.42.0), which is
+' once the recordset is gone (verified against RC6.dll 6.0.15), which is
 ' exactly what the weak-ref design here does (see cField.pvRs).
 '=========================================================================
 Option Explicit
@@ -596,9 +596,83 @@ Public Sub ResetChanges(Optional ByVal WhichChanges As ResetEnum = ResetAll)
 End Sub
 
 Public Function DataSource() As Object
+    Set DataSource = GetADORsFromContent()
 End Function
 
 Public Function GetADORsFromContent() As Object
+    Const adInteger     As Long = 3
+    Const adDouble      As Long = 5
+    Const adDecimal     As Long = 14
+    Const adLongVarWChar As Long = 203
+    Const adLongVarBinary As Long = 205
+    Const adFldFixed    As Long = &H10
+    Const adFldIsNullable As Long = &H20
+    Const adFldUpdatable As Long = 4
+    Const adFldLong     As Long = &H80
+    Const adFldKeyColumn As Long = &H8000&
+    Const VT_I8         As Integer = 20
+    Dim oArs            As Object
+    Dim lCol            As Long
+    Dim lRow            As Long
+    Dim lType           As Long
+    Dim lAttrib         As Long
+    Dim oColumn         As cColumn
+    Dim vValue          As Variant
+
+    Set oArs = CreateObject("ADODB.Recordset")
+    For lCol = 0 To m_lFieldCount - 1
+        lType = pvDeclTypeCode(m_aDeclType(lCol))
+        If Len(m_aDeclType(lCol)) = 0 Then
+            lType = pvValueTypeCode(lCol)
+        End If
+        Set oColumn = frColSchema(lCol)
+        lAttrib = adFldUpdatable Or adFldIsNullable
+        Select Case lType
+        Case 1
+            If Not oColumn Is Nothing Then
+                If oColumn.PrimaryKey Then
+                    lType = adInteger
+                    lAttrib = lAttrib Or adFldFixed Or adFldKeyColumn
+                End If
+            End If
+            If lType = 1 Then
+                lType = adDecimal
+                lAttrib = lAttrib Or adFldFixed
+            End If
+        Case 2
+            lType = adDouble
+            lAttrib = lAttrib Or adFldFixed
+        Case 4
+            lType = adLongVarBinary
+            lAttrib = lAttrib Or adFldLong
+        Case Else
+            lType = adLongVarWChar
+            lAttrib = lAttrib Or adFldLong
+        End Select
+        If lType = adLongVarWChar Or lType = adLongVarBinary Then
+            oArs.Fields.Append m_aFieldName(lCol), lType, -1, lAttrib
+        Else
+            oArs.Fields.Append m_aFieldName(lCol), lType, 0, lAttrib
+        End If
+    Next
+    oArs.Open
+    For lRow = 0 To m_lRecordCount - 1
+        oArs.AddNew
+        For lCol = 0 To m_lFieldCount - 1
+            vValue = m_aData(lCol, lRow)
+            If Not pvIsNullCell(vValue) Then
+                If VarType(vValue) = VT_I8 Then
+                    vValue = CDec(vValue)
+                End If
+                oArs.Fields(lCol).Value = vValue
+            End If
+        Next
+        oArs.Update
+    Next
+    If m_lRecordCount > 0 Then
+        oArs.MoveFirst
+    End If
+    Set GetADORsFromContent = oArs
 End Function
 
 Public Function ToJSONUTF8(Optional ByVal ValueArrAsColsRows As Boolean, Optional ByVal Indent As Byte, Optional ByVal UniEscaping As Boolean, Optional ByVal LfChar As Byte) As Byte()

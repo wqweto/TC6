@@ -436,6 +436,13 @@ Public Sub CreateTableFromRsContent(Content() As Byte, Optional NewTableName As 
 End Sub
 
 Public Sub CreateTableFromADORs(CnnDst As cConnection, ByVal TableName As String, AdoRs As Object, Optional arrDataTypes As Variant)
+    Dim oCnn            As cConnection
+
+    Set oCnn = CnnDst
+    If oCnn Is Nothing Then
+        Set oCnn = Me
+    End If
+    CopyAdoRsToTable oCnn, TableName, AdoRs, arrDataTypes, False, Nothing
 End Sub
 
 Public Sub CreateTable(TableName As String, Optional FieldDefs As Collection)

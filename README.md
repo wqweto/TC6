@@ -67,10 +67,9 @@ RC6.dll and expects it registered on the machine; it is skipped otherwise.
 
 ## Compatibility notes
 
-- Development and tests bind to the winsqlite3.dll shipped with Windows
-  (SQLite 3.51 on current Windows 11); the release DLL links the embedded
-  VBSQLite objects instead. No encryption codec, so `ReKey`/`EncrKey`
-  raise/no-op.
+- Development and tests bind to the winsqlite3.dll shipped with Windows;
+  the release DLL links the embedded VBSQLite objects instead. No
+  encryption codec, so `ReKey`/`EncrKey` raise/no-op.
 - DB NULLs surface as `Empty` by default, `cConnection.MapDbNullToEmpty =
   False` restores `Null` (matches RC6).
 - 64-bit integers use `Variant` of `VT_I8`, `UniqueID64` values match RC6's
