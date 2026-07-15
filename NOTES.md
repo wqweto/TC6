@@ -422,7 +422,23 @@ type. `cTestHost` is `MultiUse`.
       below); loads via `Content` Let into a 0-row pending-ops recordset
       that `UpdateBatch` applies, cross-verified with RC6 in both
       directions.
-- [ ] `GetADORsFromContent` (ADO tail), `ToJSONUTF8`, `GetRowsWithHeaders`.
+- [x] `ToJSONUTF8` — byte-identical to RC6 (pinned by `JsonRC6Compat`, 12
+      cases): `{"RecordCount": N,"Fields": [{ "Name", "Type" (decltype,
+      empty for expressions), "PrimaryKey", "Nullable" (= Not NOT NULL),
+      "DefaultValue" ("NULL" when none, empty for expressions)}],
+      "RowsCols"/"ColsRows": [rows or transposed columns]}`. Values: null,
+      numbers via `CStr(CDec(v))` (0.000015 not 1.5E-05; out-of-range
+      doubles fall back to CStr → 1E+300), strings with `\" \\ \b \t \n
+      \f \r` + lowercase `\uXXXX` for other control chars (and for >127
+      with UniEscaping), blobs as Base64. Compact: one space after `:`,
+      rows as `[ v,  v]`. Indent=N: line break (CRLF, or `Chr$(LfChar)`
+      when nonzero) + N/2N-space levels, continuation lines align under
+      the `"{ "`/`"[ "` opener (2N+2 spaces); empty recordset serializes
+      `[]` inline in both modes.
+- [x] `GetRowsWithHeaders` — GetRows plus a field-name header row/col at
+      index 0 (index -1 with `HeaderAtIdxMinus1`, LBound -1); RowCount
+      counts data rows only; TransPosed mirrors the shape.
+- [ ] `GetADORsFromContent` (ADO tail).
 
 ## RC6 `Content` blob format (reverse-engineered, RC6.dll 3.42.0)
 

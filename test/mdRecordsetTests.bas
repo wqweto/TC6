@@ -44,6 +44,9 @@ Public Sub RunRecordsetTests()
     Test_ChangesOnlyTextPkOps
     Test_ChangesOnlyNotUpdatable
     Test_ChangesOnlyRC6Compat
+    Test_GetRowsWithHeaders
+    Test_ToJSONUTF8
+    Test_JsonRC6Compat
 End Sub
 
 Private Function pvSeededDb() As cConnection
@@ -1453,6 +1456,142 @@ Private Function pvChgCmpRange(baA() As Byte, baB() As Byte, ByVal lFrom As Long
         End If
     Next
 End Function
+
+Private Sub Test_GetRowsWithHeaders()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+    Dim vRows           As Variant
+
+    If Not TestBegin("cRecordset.GetRowsWithHeaders") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = pvSeededDb()
+    Set oRs = oCnn.OpenRecordset("SELECT id, name FROM t ORDER BY id")
+    vRows = oRs.GetRowsWithHeaders()
+    AssertEqLng UBound(vRows, 1), 1, "cols dimension"
+    AssertEqLng UBound(vRows, 2), 3, "rows dimension incl header"
+    AssertEqStr CStr(vRows(0, 0)), "id", "header at row 0"
+    AssertEqStr CStr(vRows(1, 0)), "name", "second header"
+    AssertEqLng CLng(vRows(0, 1)), 1, "first data row shifted"
+    AssertEqStr CStr(vRows(1, 3)), "gamma", "last data row"
+    vRows = oRs.GetRowsWithHeaders(-1, 0, vbNullString, False, True)
+    AssertEqLng LBound(vRows, 2), -1, "HeaderAtIdxMinus1 lower bound"
+    AssertEqStr CStr(vRows(1, -1)), "name", "header at index -1"
+    AssertEqLng CLng(vRows(0, 0)), 1, "data at index 0"
+    vRows = oRs.GetRowsWithHeaders(-1, 0, vbNullString, True)
+    AssertEqLng UBound(vRows, 1), 3, "transposed rows dimension incl header"
+    AssertEqLng UBound(vRows, 2), 1, "transposed cols dimension"
+    AssertEqStr CStr(vRows(0, 1)), "name", "transposed header"
+    AssertEqStr CStr(vRows(2, 1)), "beta", "transposed data"
+    vRows = oRs.GetRowsWithHeaders(2, 1, "name")
+    AssertEqLng UBound(vRows, 1), 0, "field list restricts columns"
+    AssertEqLng UBound(vRows, 2), 2, "RowCount counts data rows"
+    AssertEqStr CStr(vRows(0, 0)) & "," & CStr(vRows(0, 1)) & "," & CStr(vRows(0, 2)), "name,beta,gamma", "subset values"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub Test_ToJSONUTF8()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+    Dim sJson           As String
+
+    If Not TestBegin("cRecordset.ToJSONUTF8") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    oCnn.Execute "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL, data BLOB)"
+    oCnn.Execute "INSERT INTO t VALUES(1, 'alpha', 1.5, X'01FF'), (2, NULL, NULL, NULL)"
+    Set oRs = oCnn.OpenRecordset("SELECT id, name, score, data FROM t ORDER BY id")
+    sJson = FromUtf8Array(oRs.ToJSONUTF8())
+    AssertEqStr sJson, "{""RecordCount"": 2,""Fields"": [{ ""Name"": ""id"", ""Type"": ""INTEGER"", ""PrimaryKey"": true, ""Nullable"": true, ""DefaultValue"": ""NULL""},{ ""Name"": ""name"", ""Type"": ""TEXT"", ""PrimaryKey"": false, ""Nullable"": true, ""DefaultValue"": ""NULL""},{ ""Name"": ""score"", ""Type"": ""REAL"", ""PrimaryKey"": false, ""Nullable"": true, ""DefaultValue"": ""NULL""},{ ""Name"": ""data"", ""Type"": ""BLOB"", ""PrimaryKey"": false, ""Nullable"": true, ""DefaultValue"": ""NULL""}],""RowsCols"": [[ 1,  ""alpha"",  1.5,  ""Af8=""],[ 2,  null,  null,  null]]}", "compact JSON"
+    sJson = FromUtf8Array(oRs.ToJSONUTF8(True))
+    AssertTrue InStr(sJson, """ColsRows"": [[ 1,  2],[ ""alpha"",  null]") > 0, "ColsRows transposed values"
+    Set oRs = oCnn.OpenRecordset("SELECT id FROM t WHERE 0")
+    sJson = FromUtf8Array(oRs.ToJSONUTF8())
+    AssertTrue InStr(sJson, """RowsCols"": []}") > 0, "empty recordset serializes []"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
+
+Private Sub pvJsonCompatCase(sCase As String, sDdl As String, sIns As String, sSel As String, ByVal bColsRows As Boolean, ByVal bytIndent As Byte, ByVal bUniEscaping As Boolean, ByVal bytLfChar As Byte)
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+    Dim oRc6Cnn         As Object
+    Dim oRc6Rs          As Object
+    Dim baTc6()         As Byte
+    Dim baRc6()         As Byte
+    Dim lIdx            As Long
+
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    oCnn.Execute sDdl
+    If Len(sIns) > 0 Then
+        oCnn.Execute sIns
+    End If
+    Set oRs = oCnn.OpenRecordset(sSel)
+    baTc6 = oRs.ToJSONUTF8(bColsRows, bytIndent, bUniEscaping, bytLfChar)
+    Set oRc6Cnn = CreateObject("RC6.cConnection")
+    oRc6Cnn.CreateNewDB ":memory:"
+    oRc6Cnn.Execute sDdl
+    If Len(sIns) > 0 Then
+        oRc6Cnn.Execute sIns
+    End If
+    Set oRc6Rs = oRc6Cnn.OpenRecordset(sSel)
+    baRc6 = oRc6Rs.ToJSONUTF8(bColsRows, bytIndent, bUniEscaping, bytLfChar)
+    lIdx = -1
+    If pvArrLen(baTc6) = pvArrLen(baRc6) Then
+        lIdx = pvChgCmpRange(baTc6, baRc6, 0, pvArrLen(baTc6))
+    End If
+    AssertTrue pvArrLen(baTc6) = pvArrLen(baRc6) And lIdx < 0, sCase & ": JSON byte-identical to RC6 (size " & pvArrLen(baTc6) & " vs " & pvArrLen(baRc6) & ", diff at " & lIdx & ")"
+End Sub
+
+Private Sub Test_JsonRC6Compat()
+    Dim oProbe          As Object
+
+    If Not TestBegin("cRecordset.JsonRC6Compat") Then Exit Sub
+    On Error Resume Next
+    Set oProbe = CreateObject("RC6.cConnection")
+    If oProbe Is Nothing Then
+        TestSkipCurrent "RC6.dll not registered"
+        Exit Sub
+    End If
+    On Error GoTo EH
+    pvJsonCompatCase "mixed_types", "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL, data BLOB)", _
+        "INSERT INTO t VALUES(1, 'alpha', 1.5, X'01FF'), (2, NULL, NULL, NULL), (3, 'q""uo' || char(10) || 'te', -0.25, X'')", _
+        "SELECT id, name, score, data FROM t ORDER BY id", False, 0, False, 0
+    pvJsonCompatCase "colsrows", "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)", _
+        "INSERT INTO t VALUES(1, 'a'), (2, 'b')", "SELECT id, v FROM t ORDER BY id", True, 0, False, 0
+    pvJsonCompatCase "indent2", "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL, data BLOB)", _
+        "INSERT INTO t VALUES(1, 'alpha', 1.5, X'01FF'), (2, NULL, NULL, NULL)", _
+        "SELECT id, name, score, data FROM t ORDER BY id", False, 2, False, 0
+    pvJsonCompatCase "indent3_lf10", "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)", _
+        "INSERT INTO t VALUES(1, 'a')", "SELECT id, v FROM t", False, 3, False, 10
+    pvJsonCompatCase "unicode_raw", "CREATE TABLE u(v TEXT)", _
+        "INSERT INTO u VALUES(CAST(X'D0A2D0B5D181D182' AS TEXT))", "SELECT v FROM u", False, 0, False, 0
+    pvJsonCompatCase "unicode_esc", "CREATE TABLE u(v TEXT)", _
+        "INSERT INTO u VALUES(CAST(X'D0A2D0B5D181D182' AS TEXT) || 'x' || char(255))", "SELECT v FROM u", False, 0, True, 0
+    pvJsonCompatCase "escapes", "CREATE TABLE u(v TEXT)", _
+        "INSERT INTO u VALUES('tab' || char(9) || 'bs\' || char(1) || char(31) || 'cr' || char(13) || 'ff' || char(12) || 'end')", _
+        "SELECT v FROM u", False, 0, False, 0
+    pvJsonCompatCase "reals_dec", "CREATE TABLE r(v REAL, w REAL NOT NULL DEFAULT 3, x TEXT DEFAULT 'dv')", _
+        "INSERT INTO r VALUES(0.1, 1e300, 'a'), (1.5E-5, -0.5, 'b')", "SELECT v, w, x FROM r", False, 0, False, 0
+    pvJsonCompatCase "int64", "CREATE TABLE w(v INTEGER)", _
+        "INSERT INTO w VALUES(9007199254740993), (-9007199254740993)", "SELECT v FROM w", False, 0, False, 0
+    pvJsonCompatCase "expressions", "CREATE TABLE r(v REAL, x TEXT)", _
+        "INSERT INTO r VALUES(0.1, 'a'), (2.5, 'b')", "SELECT v + 1 AS e, 'x' || x AS f FROM r", False, 0, False, 0
+    pvJsonCompatCase "empty_rs", "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)", _
+        vbNullString, "SELECT id, v FROM t", False, 0, False, 0
+    pvJsonCompatCase "empty_indent", "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)", _
+        vbNullString, "SELECT id, v FROM t", True, 2, False, 0
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
+End Sub
 
 Private Sub Test_ContentChangesOnlyRC6()
     Dim oCnn            As cConnection

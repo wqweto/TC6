@@ -49,6 +49,7 @@ Public Event QueryFinished()
 Public Event Reset()
 
 Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
+Private Declare Function CryptBinaryToString Lib "crypt32" Alias "CryptBinaryToStringW" (pbBinary As Any, ByVal cbBinary As Long, ByVal dwFlags As Long, ByVal pszString As LongPtr, pcchString As Long) As Long
 
 Private Enum eRowState
     ROW_CLEAN = 0
@@ -491,7 +492,57 @@ Public Function GetRows(Optional ByVal RowCount As Long = -1, Optional ByVal Sta
 End Function
 
 Public Function GetRowsWithHeaders(Optional ByVal RowCount As Long = -1, Optional ByVal StartIdxZeroBased As Long, Optional FieldListCommaSeparated As String, Optional ByVal TransPosed As Boolean, Optional ByVal HeaderAtIdxMinus1 As Boolean) As Variant()
-    pvNotImpl "GetRowsWithHeaders"
+    Dim aCol()          As Long
+    Dim lNumCols        As Long
+    Dim lFirst          As Long
+    Dim lLast           As Long
+    Dim lNumRows        As Long
+    Dim aOut()          As Variant
+    Dim lRow            As Long
+    Dim lCol            As Long
+    Dim lBase           As Long
+
+    aCol = pvResolveColumns(FieldListCommaSeparated, lNumCols)
+    lFirst = StartIdxZeroBased
+    If lFirst < 0 Then
+        lFirst = 0
+    End If
+    If RowCount < 0 Then
+        lLast = m_lRecordCount - 1
+    Else
+        lLast = lFirst + RowCount - 1
+    End If
+    If lLast > m_lRecordCount - 1 Then
+        lLast = m_lRecordCount - 1
+    End If
+    lNumRows = lLast - lFirst + 1
+    If lNumRows < 0 Then
+        lNumRows = 0
+    End If
+    If lNumCols = 0 Then
+        Exit Function
+    End If
+    '--- RC6 semantics: header row/col of field names precedes the data,
+    '--- at index -1 instead of 0 with HeaderAtIdxMinus1
+    lBase = IIf(HeaderAtIdxMinus1, -1, 0)
+    If TransPosed Then
+        ReDim aOut(lBase To lBase + lNumRows, 0 To lNumCols - 1) As Variant
+        For lCol = 0 To lNumCols - 1
+            aOut(lBase, lCol) = m_aFieldName(aCol(lCol))
+            For lRow = 0 To lNumRows - 1
+                aOut(lBase + 1 + lRow, lCol) = m_aData(aCol(lCol), lFirst + lRow)
+            Next
+        Next
+    Else
+        ReDim aOut(0 To lNumCols - 1, lBase To lBase + lNumRows) As Variant
+        For lCol = 0 To lNumCols - 1
+            aOut(lCol, lBase) = m_aFieldName(aCol(lCol))
+            For lRow = 0 To lNumRows - 1
+                aOut(lCol, lBase + 1 + lRow) = m_aData(aCol(lCol), lFirst + lRow)
+            Next
+        Next
+    End If
+    GetRowsWithHeaders = aOut
 End Function
 
 Public Sub ReQuery()
@@ -551,7 +602,114 @@ Public Function GetADORsFromContent() As Object
 End Function
 
 Public Function ToJSONUTF8(Optional ByVal ValueArrAsColsRows As Boolean, Optional ByVal Indent As Byte, Optional ByVal UniEscaping As Boolean, Optional ByVal LfChar As Byte) As Byte()
-    pvNotImpl "ToJSONUTF8"
+    Dim sLf             As String
+    Dim sI1             As String
+    Dim sI2             As String
+    Dim sI3             As String
+    Dim aFields()       As String
+    Dim aPairs(0 To 4)  As String
+    Dim aParts()        As String
+    Dim aElems()        As String
+    Dim lCol            As Long
+    Dim lRow            As Long
+    Dim oColumn         As cColumn
+    Dim sText           As String
+    Dim sJson           As String
+    Dim sKey            As String
+    Dim lCount          As Long
+    Dim lIdx            As Long
+
+    If Indent > 0 Then
+        If LfChar = 0 Then
+            sLf = vbCrLf
+        Else
+            sLf = Chr$(LfChar)
+        End If
+        sI1 = Space$(Indent)
+        sI2 = Space$(2 * CLng(Indent))
+        '--- continuation lines align under the "{ "/"[ " opener
+        sI3 = Space$(2 * CLng(Indent) + 2)
+    End If
+    '--- field descriptors (expression columns: empty Type/DefaultValue)
+    ReDim aFields(0 To m_lFieldCount) As String
+    For lCol = 0 To m_lFieldCount - 1
+        Set oColumn = frColSchema(lCol)
+        aPairs(0) = """Name"": " & pvJsonString(m_aFieldName(lCol), UniEscaping)
+        aPairs(1) = """Type"": " & pvJsonString(m_aDeclType(lCol), UniEscaping)
+        If oColumn Is Nothing Then
+            aPairs(2) = """PrimaryKey"": false"
+            aPairs(3) = """Nullable"": true"
+        Else
+            aPairs(2) = """PrimaryKey"": " & IIf(oColumn.PrimaryKey, "true", "false")
+            aPairs(3) = """Nullable"": " & IIf(oColumn.NotNullConstraint, "false", "true")
+        End If
+        sText = vbNullString
+        If Len(m_aOrigTable(lCol)) > 0 Then
+            If Not oColumn Is Nothing Then
+                sText = pvStripQuotes(oColumn.DefaultValue)
+            End If
+            If Len(sText) = 0 Then
+                sText = "NULL"
+            End If
+        End If
+        aPairs(4) = """DefaultValue"": " & pvJsonString(sText, UniEscaping)
+        If Indent = 0 Then
+            aFields(lCol) = "{ " & Join(aPairs, ", ") & "}"
+        Else
+            aFields(lCol) = sI2 & "{ " & aPairs(0)
+            For lIdx = 1 To UBound(aPairs)
+                aFields(lCol) = aFields(lCol) & "," & sLf & sI3 & aPairs(lIdx)
+            Next
+            aFields(lCol) = aFields(lCol) & sLf & sI2 & "}"
+        End If
+    Next
+    ReDim Preserve aFields(0 To IIf(m_lFieldCount > 0, m_lFieldCount - 1, 0)) As String
+    '--- value matrix: rows of cells, or columns of row-values (an empty
+    '--- recordset serializes as [] in both modes)
+    If ValueArrAsColsRows Then
+        sKey = "ColsRows"
+        lCount = m_lFieldCount
+    Else
+        sKey = "RowsCols"
+        lCount = m_lRecordCount
+    End If
+    If m_lRecordCount = 0 Then
+        lCount = 0
+    End If
+    ReDim aParts(0 To lCount) As String
+    For lIdx = 0 To lCount - 1
+        If ValueArrAsColsRows Then
+            ReDim aElems(0 To m_lRecordCount) As String
+            For lRow = 0 To m_lRecordCount - 1
+                aElems(lRow) = pvJsonValue(m_aData(lIdx, lRow), UniEscaping)
+            Next
+            ReDim Preserve aElems(0 To IIf(m_lRecordCount > 0, m_lRecordCount - 1, 0)) As String
+        Else
+            ReDim aElems(0 To m_lFieldCount) As String
+            For lCol = 0 To m_lFieldCount - 1
+                aElems(lCol) = pvJsonValue(m_aData(lCol, lIdx), UniEscaping)
+            Next
+            ReDim Preserve aElems(0 To IIf(m_lFieldCount > 0, m_lFieldCount - 1, 0)) As String
+        End If
+        If Indent = 0 Then
+            aParts(lIdx) = "[ " & Join(aElems, ",  ") & "]"
+        Else
+            aParts(lIdx) = sI2 & "[ " & aElems(0)
+            For lCol = 1 To UBound(aElems)
+                aParts(lIdx) = aParts(lIdx) & "," & sLf & sI3 & aElems(lCol)
+            Next
+            aParts(lIdx) = aParts(lIdx) & sLf & sI2 & "]"
+        End If
+    Next
+    ReDim Preserve aParts(0 To IIf(lCount > 0, lCount - 1, 0)) As String
+    If Indent = 0 Then
+        sJson = "{""RecordCount"": " & m_lRecordCount & ",""Fields"": [" & Join(aFields, ",") & "],""" & sKey & """: [" & Join(aParts, ",") & "]}"
+    ElseIf lCount = 0 Then
+        sJson = "{" & sLf & sI1 & """RecordCount"": " & m_lRecordCount & "," & sLf & sI1 & """Fields"": [" & sLf & Join(aFields, "," & sLf) & sLf & sI1 & "]," & sLf & sI1 & """" & sKey & """: []" & sLf & "}"
+    Else
+        sJson = "{" & sLf & sI1 & """RecordCount"": " & m_lRecordCount & "," & sLf & sI1 & """Fields"": [" & sLf & Join(aFields, "," & sLf) & sLf & sI1 & "]," & sLf & sI1 & """" & sKey & """: [" & sLf & Join(aParts, "," & sLf) & sLf & sI1 & "]" & sLf & "}"
+    End If
+    ToJSONUTF8 = ToUtf8Array(sJson)
 End Function
 
 Friend Sub frOpen(oCnn As cConnection, sSql As String, ByVal bReadOnly As Boolean)
@@ -2838,6 +2996,89 @@ Private Function pvIntWidth(ByVal lCol As Long, Optional ByVal bLoadedOnly As Bo
             End If
         End If
     Next
+End Function
+
+Private Function pvJsonValue(vValue As Variant, ByVal bUniEscaping As Boolean) As String
+    Dim baCell()        As Byte
+
+    If pvIsNullCell(vValue) Then
+        pvJsonValue = "null"
+    ElseIf VarType(vValue) = vbString Then
+        pvJsonValue = pvJsonString(CStr(vValue), bUniEscaping)
+    ElseIf IsArray(vValue) Then
+        baCell = vValue
+        pvJsonValue = """" & pvBase64(baCell) & """"
+    Else
+        pvJsonValue = pvJsonNumber(vValue)
+    End If
+End Function
+
+Private Function pvJsonNumber(vValue As Variant) As String
+    '--- RC6 formats via Decimal (0.000015 not 1.5E-05); out-of-range
+    '--- doubles fall back to scientific notation (1E+300)
+    On Error GoTo EH
+    pvJsonNumber = CStr(CDec(vValue))
+    Exit Function
+EH:
+    pvJsonNumber = CStr(vValue)
+End Function
+
+Private Function pvJsonString(sText As String, ByVal bUniEscaping As Boolean) As String
+    Dim lIdx            As Long
+    Dim lChar           As Long
+    Dim sChunk          As String
+
+    pvJsonString = """"
+    For lIdx = 1 To Len(sText)
+        lChar = AscW(Mid$(sText, lIdx, 1)) And &HFFFF&
+        Select Case lChar
+        Case 34
+            sChunk = "\"""
+        Case 92
+            sChunk = "\\"
+        Case 8
+            sChunk = "\b"
+        Case 9
+            sChunk = "\t"
+        Case 10
+            sChunk = "\n"
+        Case 12
+            sChunk = "\f"
+        Case 13
+            sChunk = "\r"
+        Case Is < 32
+            sChunk = "\u" & LCase$(Right$("000" & Hex$(lChar), 4))
+        Case Is > 127
+            If bUniEscaping Then
+                sChunk = "\u" & LCase$(Right$("000" & Hex$(lChar), 4))
+            Else
+                sChunk = Mid$(sText, lIdx, 1)
+            End If
+        Case Else
+            sChunk = Mid$(sText, lIdx, 1)
+        End Select
+        pvJsonString = pvJsonString & sChunk
+    Next
+    pvJsonString = pvJsonString & """"
+End Function
+
+Private Function pvBase64(baBytes() As Byte) As String
+    Const CRYPT_STRING_BASE64 As Long = 1
+    Const CRYPT_STRING_NOCRLF As Long = &H40000000
+    Dim lSize           As Long
+
+    If pvBytesLen(baBytes) = 0 Then
+        Exit Function
+    End If
+    If CryptBinaryToString(baBytes(0), pvBytesLen(baBytes), CRYPT_STRING_BASE64 Or CRYPT_STRING_NOCRLF, 0, lSize) = 0 Then
+        Exit Function
+    End If
+    pvBase64 = String$(lSize, 0)
+    Call CryptBinaryToString(baBytes(0), pvBytesLen(baBytes), CRYPT_STRING_BASE64 Or CRYPT_STRING_NOCRLF, StrPtr(pvBase64), lSize)
+    pvBase64 = Left$(pvBase64, lSize)
+    If Right$(pvBase64, 1) = vbNullChar Then
+        pvBase64 = Left$(pvBase64, Len(pvBase64) - 1)
+    End If
 End Function
 
 Private Function pvNullCell() As Variant
