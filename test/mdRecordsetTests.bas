@@ -1744,6 +1744,16 @@ Private Sub Test_FieldOutlivesRecordset()
     lErr = Err.Number
     On Error GoTo EH
     AssertEqLng lErr, 91, "field access after its recordset is freed raises 91 (no crash)"
+    On Error Resume Next
+    vValue = oField.OriginalValue
+    lErr = Err.Number
+    On Error GoTo EH
+    AssertEqLng lErr, 91, "OriginalValue on orphan raises 91 (no crash)"
+    On Error Resume Next
+    vValue = oField.UnderlyingValue
+    lErr = Err.Number
+    On Error GoTo EH
+    AssertEqLng lErr, 91, "UnderlyingValue on orphan raises 91 (no crash)"
     TestEnd
     Exit Sub
 EH:
