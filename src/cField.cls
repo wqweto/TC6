@@ -37,7 +37,15 @@ Public Enum FieldType
     VB_Time_AutoConverted = 9
 End Enum
 
-Private m_pRs                       As LongPtr
+#If Win64 Then
+Private Const PTR_SIZE                      As Long = 8
+#Else
+Private Const PTR_SIZE                      As Long = 4
+#End If
+
+Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
+
+Private m_pRs                       As cRecordset
 Private m_lCol                      As Long
 
 Public Property Get IndexInFieldList() As Long
@@ -45,42 +53,42 @@ Public Property Get IndexInFieldList() As Long
 End Property
 
 Public Property Get Name() As String
-    Name = pvRs.frFieldName(m_lCol)
+    Name = m_pRs.frFieldName(m_lCol)
 End Property
 
 Public Property Get DefaultValue() As String
     Dim oColumn         As cColumn
 
-    Set oColumn = pvRs.frColSchema(m_lCol)
+    Set oColumn = m_pRs.frColSchema(m_lCol)
     If Not oColumn Is Nothing Then
         DefaultValue = oColumn.DefaultValue
     End If
 End Property
 
 Public Property Get Updateable() As Boolean
-    Updateable = pvRs.frColumnUpdatable(m_lCol)
+    Updateable = m_pRs.frColumnUpdatable(m_lCol)
 End Property
 
 Public Property Get OriginalColumnName() As String
-    OriginalColumnName = pvRs.frColOriginName(m_lCol)
+    OriginalColumnName = m_pRs.frColOriginName(m_lCol)
 End Property
 
 Public Property Get OriginalTableName() As String
-    OriginalTableName = pvRs.frColOriginTable(m_lCol)
+    OriginalTableName = m_pRs.frColOriginTable(m_lCol)
 End Property
 
 Public Property Get OriginalDataBaseName() As String
-    OriginalDataBaseName = pvRs.frColOriginDb(m_lCol)
+    OriginalDataBaseName = m_pRs.frColOriginDb(m_lCol)
 End Property
 
 Public Property Get OriginalDataType() As String
-    OriginalDataType = pvRs.frColDeclType(m_lCol)
+    OriginalDataType = m_pRs.frColDeclType(m_lCol)
 End Property
 
 Public Property Get CollationSequence() As String
     Dim oColumn         As cColumn
 
-    Set oColumn = pvRs.frColSchema(m_lCol)
+    Set oColumn = m_pRs.frColSchema(m_lCol)
     If Not oColumn Is Nothing Then
         CollationSequence = oColumn.Collate
     End If
@@ -89,7 +97,7 @@ End Property
 Public Property Get NotNullConstraint() As Boolean
     Dim oColumn         As cColumn
 
-    Set oColumn = pvRs.frColSchema(m_lCol)
+    Set oColumn = m_pRs.frColSchema(m_lCol)
     If Not oColumn Is Nothing Then
         NotNullConstraint = oColumn.NotNullConstraint
     End If
@@ -98,7 +106,7 @@ End Property
 Public Property Get PrimaryKey() As Boolean
     Dim oColumn         As cColumn
 
-    Set oColumn = pvRs.frColSchema(m_lCol)
+    Set oColumn = m_pRs.frColSchema(m_lCol)
     If Not oColumn Is Nothing Then
         PrimaryKey = oColumn.PrimaryKey
     End If
@@ -107,7 +115,7 @@ End Property
 Public Property Get AutoIncrement() As Boolean
     Dim oColumn         As cColumn
 
-    Set oColumn = pvRs.frColSchema(m_lCol)
+    Set oColumn = m_pRs.frColSchema(m_lCol)
     If Not oColumn Is Nothing Then
         AutoIncrement = oColumn.PrimaryAutoIncrement
     End If
@@ -116,14 +124,14 @@ End Property
 Public Property Get UniqueConstraint() As Boolean
     Dim oColumn         As cColumn
 
-    Set oColumn = pvRs.frColSchema(m_lCol)
+    Set oColumn = m_pRs.frColSchema(m_lCol)
     If Not oColumn Is Nothing Then
         UniqueConstraint = oColumn.UniqueConstraint
     End If
 End Property
 
 Public Property Get ColumnType() As FieldType
-    ColumnType = pvValueType(pvRs.frCellValue(m_lCol))
+    ColumnType = pvValueType(m_pRs.frCellValue(m_lCol))
 End Property
 
 Public Property Get DefinedSize() As Long
@@ -132,7 +140,7 @@ Public Property Get DefinedSize() As Long
     Dim lEnd            As Long
 
     '--- the size in parentheses of the declared type, e.g. VARCHAR(50)
-    sType = pvRs.frColDeclType(m_lCol)
+    sType = m_pRs.frColDeclType(m_lCol)
     lPos = InStr(sType, "(")
     If lPos > 0 Then
         lEnd = InStr(lPos, sType, ")")
@@ -143,48 +151,37 @@ Public Property Get DefinedSize() As Long
 End Property
 
 Public Property Get ActualSize() As Long
-    ActualSize = pvValueSize(pvRs.frCellValue(m_lCol))
+    ActualSize = pvValueSize(m_pRs.frCellValue(m_lCol))
 End Property
 
 Public Property Get Changed() As Boolean
-    Changed = pvRs.frCellDirty(m_lCol)
+    Changed = m_pRs.frCellDirty(m_lCol)
 End Property
 
 Public Property Get UnderlyingValue() As Variant
-    UnderlyingValue = pvRs.frCellValue(m_lCol)
+    UnderlyingValue = m_pRs.frCellValue(m_lCol)
 End Property
 
 Public Property Get OriginalValue() As Variant
-    OriginalValue = pvRs.frCellOriginal(m_lCol)
+    OriginalValue = m_pRs.frCellOriginal(m_lCol)
 End Property
 
 Public Property Get Value() As Variant
 Attribute Value.VB_UserMemId = 0
-    Value = pvRs.frCellValue(m_lCol)
+    Value = m_pRs.frCellValue(m_lCol)
 End Property
 
 Public Property Let Value(RHS As Variant)
-    pvRs.frSetCellValue m_lCol, RHS
-End Property
-
-Private Property Get pvRs() As cRecordset
-    '--- bail out BEFORE any dereference when the parent recordset is gone
-    '--- (frTerminate zeroed the weak pointer): calling through the alias of
-    '--- a freed object would AV, and even a Nothing return AVs in some
-    '--- late-bound paths - raising here surfaces a clean error 91 instead
-    If m_pRs = 0 Then
-        Err.Raise 91
-    End If
-    Set pvRs = ObjectFromPtr(m_pRs)
+    m_pRs.frSetCellValue m_lCol, RHS
 End Property
 
 Friend Sub frInit(oRs As cRecordset, ByVal lCol As Long)
-    m_pRs = ObjPtr(oRs)
+    Call CopyMemory(m_pRs, ObjPtr(oRs), PTR_SIZE)
     m_lCol = lCol
 End Sub
 
 Friend Sub frTerminate()
-    m_pRs = 0
+    Call CopyMemory(m_pRs, ObjPtr(Nothing), PTR_SIZE)
 End Sub
 
 Private Function pvValueType(vValue As Variant) As FieldType
@@ -219,3 +216,7 @@ Private Function pvArrayLen(vArr As Variant) As Long
     pvArrayLen = UBound(vArr) - LBound(vArr) + 1
 QH:
 End Function
+
+Private Sub Class_Terminate()
+    frTerminate
+End Sub

@@ -355,10 +355,10 @@ type. `cTestHost` is `MultiUse`.
       raises exactly **err 91** on *every* recordset-dependent get/let
       (`Value`/`Name`/`ColumnType`/`ActualSize`/`Changed`/`OriginalValue`/
       `UnderlyingValue`/`Updateable`/…) while `IndexInFieldList` keeps
-      working. The current weak-ref implementation (`cField.pvRs` raises 91
-      on the zeroed pointer **before** any dereference — the raw deref used
-      to AV in late-bound paths) matches RC6 member-for-member and is kept
-      as final; the two lifetime tests pin the contract.
+      working. The current weak-ref implementation (non-refcounted
+      `m_pRs As cRecordset` — an early-bound call through the zeroed member
+      raises 91 **before** any dereference) matches RC6 member-for-member
+      and is kept as final; the two lifetime tests pin the contract.
 - [x] Schema objects: `cDataBases`/`cDataBase` → `cTables`/`cTable` →
       `cColumns`/`cColumn` + `cIndexes`/`cIndex`, `cTriggers`/`cTrigger`,
       `cViews`/`cView`, wired from `cConnection.DataBases` (see section
@@ -631,9 +631,13 @@ by `cConnection.OpenRecordset`/`OpenSchema` (`frOpen`), or via the public
   `(field, record)` array; `TransPosed` and a comma-separated field subset
   supported).
 - **No reference cycle**: the recordset owns `cFields`, which owns the
-  `cField`s. Their back-references to the recordset are **weak** (raw `ObjPtr`,
-  dereferenced via `mdGlobals.ObjectFromPtr` — `__vbaObjSetAddref` from a
-  pointer). A strong back-ref would be a cycle that keeps the recordset (and
+  `cField`s. Their back-references to the recordset are **weak**: `m_pRs` is
+  typed `As cRecordset` but the raw pointer is `CopyMemory`'d in/out (never
+  `Set`), so no AddRef/Release ever fires and members call through it
+  directly with no per-access accessor cost. `Class_Terminate` re-zeroes it
+  the same way — otherwise VB's teardown would auto-Release the still-alive
+  recordset through the non-refcounted member (unbalanced Release). A strong
+  back-ref would be a cycle that keeps the recordset (and
   its whole result matrix) alive forever. Proven by the `NoReferenceCycle`
   test: a module-level `g_lLiveRecordsets` (bumped in `Class_Initialize`/
   `Terminate`) returns to baseline after a recordset goes out of scope.

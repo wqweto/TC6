@@ -13,7 +13,6 @@ Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination
 Private Declare Function WideCharToMultiByte Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, ByVal lpWideCharStr As Long, ByVal cchWideChar As Long, lpMultiByteStr As Any, ByVal cchMultiByte As Long, ByVal lpDefaultChar As Long, ByVal lpUsedDefaultChar As Long) As Long
 Private Declare Function MultiByteToWideChar Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, lpMultiByteStr As Any, ByVal cchMultiByte As Long, ByVal lpWideCharStr As Long, ByVal cchWideChar As Long) As Long
 Private Declare Function lstrlenA Lib "kernel32" (ByVal lpString As LongPtr) As Long
-Private Declare Function vbaObjSetAddref Lib "msvbvm60" Alias "__vbaObjSetAddref" (oDest As Any, ByVal lSrcPtr As LongPtr) As Long
 Private Declare Sub GetSystemTimePreciseAsFileTime Lib "kernel32" (lpSystemTimeAsFileTime As Currency)
 Private Declare Function FileTimeToLocalFileTime Lib "kernel32" (lpFileTime As Currency, lpLocalFileTime As Currency) As Long
 
@@ -70,10 +69,6 @@ Public Function FromUtf8PtrLen(ByVal lpUtf8 As LongPtr, ByVal lLen As Long) As S
     FromUtf8PtrLen = String$(lLen, 0)
     lSize = MultiByteToWideChar(CP_UTF8, 0, ByVal lpUtf8, lLen, StrPtr(FromUtf8PtrLen), lLen)
     FromUtf8PtrLen = Left$(FromUtf8PtrLen, lSize)
-End Function
-
-Public Function ObjectFromPtr(ByVal pObj As LongPtr) As IUnknown
-    Call vbaObjSetAddref(ObjectFromPtr, pObj)
 End Function
 
 Public Function BindVariant(ByVal hStmt As LongPtr, ByVal lIndex As Long, vValue As Variant) As Long

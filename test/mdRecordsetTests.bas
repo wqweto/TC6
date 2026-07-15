@@ -763,8 +763,8 @@ Private Sub Test_FieldOutlivesRecordset()
 
     If Not TestBegin("cRecordset.FieldOutlivesRecordset") Then Exit Sub
     On Error GoTo EH
-    '--- oField survives the recordset; frTerminate zeroed its weak pointer,
-    '--- so pvRs bails out with error 91 before any dereference (no AV)
+    '--- oField survives the recordset; frTerminate zeroed its weak ref,
+    '--- so member access raises error 91 before any dereference (no AV)
     Set oField = pvOrphanField()
     On Error Resume Next
     vValue = oField.Value
