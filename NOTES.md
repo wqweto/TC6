@@ -555,12 +555,14 @@ NB: `cConnection.CreateTableFromRsContent` hit a **VB6 codegen bug** —
 assigning a ByRef array *parameter* directly to a `Property Let` crashes at
 runtime (0xC000008F); the parameter must be copied to a local array first.
 
-NB: another **VB6 codegen hazard** — calling a Friend method through a
-Nothing typed reference normally raises error 91, but when the callee's
-prologue grew (frCellValue's coercion call) the aborted call corrupted the
-heap and crashed at process teardown (0xC0000005, layout-sensitive).
-`cField.Value` therefore guards `m_pRs Is Nothing` inline before the
-Friend call (hot path — kept inline, other members rely on the plain 91).
+NB: another **VB6 codegen hazard**, specific to the **default property**
+(`VB_UserMemId = 0`): `cField.Value` calling a Friend method through a
+Nothing typed reference raised error 91 but corrupted the heap once the
+callee's prologue grew (frCellValue's coercion call) — crashing at process
+teardown (0xC0000005, layout-sensitive). Identical non-default members
+(`UnderlyingValue`/`OriginalValue` through the same zeroed weak ref, same
+callee) raise a clean 91 — pinned by the orphan-field test. `cField.Value`
+therefore guards `m_pRs Is Nothing` inline (hot path — kept inline).
 
 ### `ContentChangesOnly` blob format (changed rows only)
 
