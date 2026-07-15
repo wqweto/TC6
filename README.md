@@ -23,12 +23,15 @@ library.
 
 ### Classes
 
-`cConnection`, `cRecordset` (read + batch updates, RC6-compatible `Content`
-serialization), `cFields`/`cField`, `cCommand`/`cSelectCommand` (prepared
-statements), schema objects (`cDataBases`/`cTables`/`cColumns`/`cIndexes`/
-`cTriggers`/`cViews`), `cMemDB`, and the UDF/collation subsystem
-(`IFunction`/`IAggregateFunction`/`ICollation` implemented by user classes,
-registered via `cConnection.AddUserDefined*`).
+`cConnection`, `cRecordset` (navigation/sort/find + batch updates,
+RC6-compatible `Content`/`ContentChangesOnly` serialization, `ToJSONUTF8`,
+ADO recordset export), `cFields`/`cField`, `cCommand`/`cSelectCommand`
+(prepared statements with saved-command keys and `Repl*` SQL templating),
+schema objects (`cDataBases`/`cTables`/`cColumns`/`cIndexes`/`cTriggers`/
+`cViews`), `cMemDB`, `cConverter` (ADO/OLEDB database migration with
+progress events), and the UDF/collation subsystem (`IFunction`/
+`IAggregateFunction`/`ICollation` implemented by user classes, registered
+via `cConnection.AddUserDefined*`).
 
 ## Building
 
@@ -72,6 +75,9 @@ RC6.dll and expects it registered on the machine; it is skipped otherwise.
   encryption codec, so `ReKey`/`EncrKey` raise/no-op.
 - DB NULLs surface as `Empty` by default, `cConnection.MapDbNullToEmpty =
   False` restores `Null` (matches RC6).
+- Values coerce like RC6's reader: INTEGER columns type by their width
+  class (`Byte`/`Long`/64-bit), DATE/TIME columns read as `Date`, BIT/BOOL
+  as `Boolean`.
 - 64-bit integers use `Variant` of `VT_I8`, `UniqueID64` values match RC6's
   local-time encoding.
 - `Content`/`ContentChangesOnly` blobs, `ToJSONUTF8` output, event timing
