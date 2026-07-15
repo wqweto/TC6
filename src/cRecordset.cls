@@ -108,6 +108,9 @@ Private m_cDeleted                  As VBA.Collection
 Private m_aRowLabel()               As Long
 Private m_lNextLabel                As Long
 Private m_lLoadedRows               As Long
+'--- per-column access-time coercion kind (RC6 semantics, see NOTES):
+'--- 0 = none, 1 = date, 2 = boolean, 3 = byte width, 4 = int64 width
+Private m_aColCoerce()              As Long
 '--- pending ops loaded from a ContentChangesOnly blob (see NOTES format)
 Private m_lChgCellCount             As Long
 Private m_aChgCellRow()             As Long
@@ -477,14 +480,14 @@ Public Function GetRows(Optional ByVal RowCount As Long = -1, Optional ByVal Sta
         ReDim aOut(0 To lNumRows - 1, 0 To lNumCols - 1) As Variant
         For lRow = 0 To lNumRows - 1
             For lCol = 0 To lNumCols - 1
-                aOut(lRow, lCol) = m_aData(aCol(lCol), lFirst + lRow)
+                aOut(lRow, lCol) = pvCoerceCell(aCol(lCol), m_aData(aCol(lCol), lFirst + lRow))
             Next
         Next
     Else
         ReDim aOut(0 To lNumCols - 1, 0 To lNumRows - 1) As Variant
         For lCol = 0 To lNumCols - 1
             For lRow = 0 To lNumRows - 1
-                aOut(lCol, lRow) = m_aData(aCol(lCol), lFirst + lRow)
+                aOut(lCol, lRow) = pvCoerceCell(aCol(lCol), m_aData(aCol(lCol), lFirst + lRow))
             Next
         Next
     End If
@@ -530,7 +533,7 @@ Public Function GetRowsWithHeaders(Optional ByVal RowCount As Long = -1, Optiona
         For lCol = 0 To lNumCols - 1
             aOut(lBase, lCol) = m_aFieldName(aCol(lCol))
             For lRow = 0 To lNumRows - 1
-                aOut(lBase + 1 + lRow, lCol) = m_aData(aCol(lCol), lFirst + lRow)
+                aOut(lBase + 1 + lRow, lCol) = pvCoerceCell(aCol(lCol), m_aData(aCol(lCol), lFirst + lRow))
             Next
         Next
     Else
@@ -538,7 +541,7 @@ Public Function GetRowsWithHeaders(Optional ByVal RowCount As Long = -1, Optiona
         For lCol = 0 To lNumCols - 1
             aOut(lCol, lBase) = m_aFieldName(aCol(lCol))
             For lRow = 0 To lNumRows - 1
-                aOut(lCol, lBase + 1 + lRow) = m_aData(aCol(lCol), lFirst + lRow)
+                aOut(lCol, lBase + 1 + lRow) = pvCoerceCell(aCol(lCol), m_aData(aCol(lCol), lFirst + lRow))
             Next
         Next
     End If
@@ -755,13 +758,13 @@ Public Function ToJSONUTF8(Optional ByVal ValueArrAsColsRows As Boolean, Optiona
         If ValueArrAsColsRows Then
             ReDim aElems(0 To m_lRecordCount) As String
             For lRow = 0 To m_lRecordCount - 1
-                aElems(lRow) = pvJsonValue(m_aData(lIdx, lRow), UniEscaping)
+                aElems(lRow) = pvJsonValue(lIdx, m_aData(lIdx, lRow), UniEscaping)
             Next
             ReDim Preserve aElems(0 To IIf(m_lRecordCount > 0, m_lRecordCount - 1, 0)) As String
         Else
             ReDim aElems(0 To m_lFieldCount) As String
             For lCol = 0 To m_lFieldCount - 1
-                aElems(lCol) = pvJsonValue(m_aData(lCol, lIdx), UniEscaping)
+                aElems(lCol) = pvJsonValue(lCol, m_aData(lCol, lIdx), UniEscaping)
             Next
             ReDim Preserve aElems(0 To IIf(m_lFieldCount > 0, m_lFieldCount - 1, 0)) As String
         End If
@@ -854,14 +857,14 @@ Friend Function frCellValue(ByVal lCol As Long) As Variant
     If m_lCurRow < 0 Or m_lCurRow >= m_lRecordCount Then
         Err.Raise vbObjectError, "cRecordset", "No current row (BOF or EOF)"
     End If
-    frCellValue = m_aData(lCol, m_lCurRow)
+    frCellValue = pvCoerceCell(lCol, m_aData(lCol, m_lCurRow))
 End Function
 
 Friend Function frCellValueAt(ByVal lRow As Long, ByVal lCol As Long) As Variant
     If lRow < 0 Or lRow >= m_lRecordCount Or lCol < 0 Or lCol >= m_lFieldCount Then
         Err.Raise 9
     End If
-    frCellValueAt = m_aData(lCol, lRow)
+    frCellValueAt = pvCoerceCell(lCol, m_aData(lCol, lRow))
 End Function
 
 Friend Sub frSetCellValue(ByVal lCol As Long, vValue As Variant)
@@ -1040,6 +1043,7 @@ Private Sub pvMaterialize(ByVal hStmt As LongPtr, Optional ByVal bFinalize As Bo
     m_lRecordCount = lRow
     m_lNextLabel = lRow
     m_lLoadedRows = lRow
+    pvComputeCoercion
     m_lCurRow = -1
     If m_lRecordCount > 0 Then
         m_lCurRow = 0
@@ -1928,7 +1932,7 @@ Private Function pvContentWrite() As Byte()
         pvPutByte baOut, lPos, 0
         '--- cell data
         Select Case lType
-        Case 1
+        Case 1, 7
             pvPutLong baOut, lPos, (lRows + 1) * lWidth
             For lRow = 0 To lRows - 1
                 pvPutIntCell baOut, lPos, m_aData(lCol, lRow), lWidth
@@ -2064,7 +2068,7 @@ Private Sub pvWriteFieldMeta(baOut() As Byte, lPos As Long, ByVal lCol As Long, 
     pvPutLong baOut, lPos, lType
     pvPutByte baOut, lPos, 0
     lWidth = 0
-    If lType = 1 Then
+    If lType = 1 Or lType = 7 Then
         lWidth = pvIntWidth(lCol, bLoadedOnly)
     End If
     pvPutLong baOut, lPos, lWidth
@@ -2399,11 +2403,18 @@ Private Function pvTextColIndex(ByVal lCol As Long, ByVal lKeyCol As Long) As Lo
 
     For lIdx = 0 To lCol - 1
         If lIdx <> lKeyCol Then
-            If pvDeclTypeCode(m_aDeclType(lIdx)) >= 3 Then
+            If pvIsTextishCol(lIdx) Then
                 pvTextColIndex = pvTextColIndex + 1
             End If
         End If
     Next
+End Function
+
+Private Function pvIsTextishCol(ByVal lCol As Long) As Boolean
+    Select Case pvDeclTypeCode(m_aDeclType(lCol))
+    Case 3, 4, 6
+        pvIsTextishCol = True
+    End Select
 End Function
 
 Private Sub pvContentReadChanges(baContent() As Byte)
@@ -2602,6 +2613,7 @@ Private Sub pvContentReadChanges(baContent() As Byte)
     m_lCurRow = -1
     m_bUpdatable = False
     m_bHasColSchema = True
+    pvComputeCoercion
     pvEnsureFields
 End Sub
 
@@ -2611,7 +2623,7 @@ Private Function pvColFromTextIndex(ByVal lTextIdx As Long) As Long
 
     For lCol = 0 To m_lFieldCount - 1
         If lCol <> m_lChgKeyCol Then
-            If pvDeclTypeCode(m_aDeclType(lCol)) >= 3 Then
+            If pvIsTextishCol(lCol) Then
                 If lSeen = lTextIdx Then
                     pvColFromTextIndex = lCol
                     Exit Function
@@ -2837,7 +2849,7 @@ Private Sub pvContentRead(baContent() As Byte)
         Next
         '--- cell data
         Select Case lType
-        Case 1
+        Case 1, 7
             lCount = pvGetLong(baContent, lPos)
             For lRow = 0 To lRows - 1
                 If aFlags(lRow) = 0 Then
@@ -2903,6 +2915,7 @@ Private Sub pvContentRead(baContent() As Byte)
     If lUpdatable <> 0 Then
         pvAnalyzeFromSchema
     End If
+    pvComputeCoercion
     '--- no QueryFinished here: RC6 raises no events on Content load
     pvEnsureFields
 End Sub
@@ -2950,10 +2963,15 @@ End Sub
 Private Function pvDeclTypeCode(sDeclType As String) As Long
     Dim sUpper          As String
 
-    '--- SQLite affinity rules collapsed to the four RC6 type codes; empty
-    '--- decltype (expression columns) serializes as FLOAT (RC6 behavior)
+    '--- SQLite affinity rules collapsed to the RC6 type codes (6 = date
+    '--- with cells as raw-value text, 7 = boolean with integer cells);
+    '--- empty decltype (expression columns) serializes as FLOAT
     sUpper = UCase$(sDeclType)
-    If InStr(sUpper, "INT") > 0 Then
+    If InStr(sUpper, "DATE") > 0 Or InStr(sUpper, "TIME") > 0 Then
+        pvDeclTypeCode = 6
+    ElseIf InStr(sUpper, "BIT") > 0 Or InStr(sUpper, "BOOL") > 0 Then
+        pvDeclTypeCode = 7
+    ElseIf InStr(sUpper, "INT") > 0 Then
         pvDeclTypeCode = 1
     ElseIf InStr(sUpper, "CHAR") > 0 Or InStr(sUpper, "CLOB") > 0 Or InStr(sUpper, "TEXT") > 0 Then
         pvDeclTypeCode = 3
@@ -3059,7 +3077,7 @@ Private Function pvIntWidth(ByVal lCol As Long, Optional ByVal bLoadedOnly As Bo
                 vValue = m_aOriginal(lCol, lRow)
             End If
         End If
-        If Not pvIsNullCell(vValue) Then
+        If Not pvIsNullCell(vValue) And IsNumeric(vValue) Then
             decValue = CDec(vValue)
             If decValue < 0 Or decValue > 255 Then
                 If decValue < -2147483648# Or decValue > 2147483647# Then
@@ -3072,13 +3090,19 @@ Private Function pvIntWidth(ByVal lCol As Long, Optional ByVal bLoadedOnly As Bo
     Next
 End Function
 
-Private Function pvJsonValue(vValue As Variant, ByVal bUniEscaping As Boolean) As String
+Private Function pvJsonValue(ByVal lCol As Long, vValue As Variant, ByVal bUniEscaping As Boolean) As String
     Dim baCell()        As Byte
 
     If pvIsNullCell(vValue) Then
         pvJsonValue = "null"
+    ElseIf m_aColCoerce(lCol) = 2 Then
+        '--- RC6: BIT/BOOL columns serialize as JSON booleans
+        pvJsonValue = IIf(pvCoerceCell(lCol, vValue), "true", "false")
     ElseIf VarType(vValue) = vbString Then
         pvJsonValue = pvJsonString(CStr(vValue), bUniEscaping)
+    ElseIf m_aColCoerce(lCol) = 1 Then
+        '--- RC6: numeric-stored dates serialize as quoted raw values
+        pvJsonValue = """" & pvJsonNumber(vValue) & """"
     ElseIf IsArray(vValue) Then
         baCell = vValue
         pvJsonValue = """" & pvBase64(baCell) & """"
@@ -3180,6 +3204,67 @@ Private Function pvEventPos() As Long
     End If
 End Function
 
+Private Sub pvComputeCoercion()
+    Dim lCol            As Long
+    Dim sType           As String
+
+    If m_lFieldCount = 0 Then
+        Exit Sub
+    End If
+    ReDim m_aColCoerce(0 To m_lFieldCount - 1) As Long
+    For lCol = 0 To m_lFieldCount - 1
+        sType = UCase$(m_aDeclType(lCol))
+        If InStr(sType, "DATE") > 0 Or InStr(sType, "TIME") > 0 Then
+            m_aColCoerce(lCol) = 1
+        ElseIf InStr(sType, "BIT") > 0 Or InStr(sType, "BOOL") > 0 Then
+            m_aColCoerce(lCol) = 2
+        ElseIf pvDeclTypeCode(m_aDeclType(lCol)) = 1 Then
+            '--- INTEGER columns type by their load-time width class
+            Select Case pvIntWidth(lCol)
+            Case 1
+                m_aColCoerce(lCol) = 3
+            Case 8
+                m_aColCoerce(lCol) = 4
+            End Select
+        End If
+    Next
+End Sub
+
+Private Function pvCoerceCell(ByVal lCol As Long, vValue As Variant) As Variant
+    Dim dblValue        As Double
+
+    pvCoerceCell = vValue
+    If pvIsNullCell(vValue) Then
+        Exit Function
+    End If
+    On Error GoTo EH
+    Select Case m_aColCoerce(lCol)
+    Case 1
+        '--- numeric date storage is a VB date serial (not julian)
+        If VarType(vValue) = vbString Then
+            pvCoerceCell = CDate(vValue)
+        Else
+            pvCoerceCell = CDate(CDbl(vValue))
+        End If
+    Case 2
+        If VarType(vValue) = vbString Then
+            dblValue = Val(vValue)
+        Else
+            dblValue = CDbl(vValue)
+        End If
+        pvCoerceCell = (dblValue >= 1)
+    Case 3
+        If vValue >= 0 And vValue <= 255 Then
+            pvCoerceCell = CByte(vValue)
+        End If
+    Case 4
+        pvCoerceCell = Int64Variant(vValue)
+    End Select
+    Exit Function
+EH:
+    pvCoerceCell = Empty
+End Function
+
 Private Function pvCellValueEquals(vOld As Variant, vNew As Variant) As Boolean
     Dim baOld()         As Byte
     Dim baNew()         As Byte
@@ -3221,8 +3306,11 @@ Private Function pvCellBytes(vCell As Variant, ByVal lType As Long) As Byte()
         pvCellBytes = baEmpty
     ElseIf lType = 4 And VarType(vCell) = vbByte + vbArray Then
         pvCellBytes = vCell
-    Else
+    ElseIf VarType(vCell) = vbString Then
         pvCellBytes = ToUtf8Array(CStr(vCell))
+    Else
+        '--- numeric cells in text/date columns keep the invariant "." form
+        pvCellBytes = ToUtf8Array(pvJsonNumber(vCell))
     End If
 End Function
 

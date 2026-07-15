@@ -47,6 +47,62 @@ Public Sub RunRecordsetTests()
     Test_GetRowsWithHeaders
     Test_ToJSONUTF8
     Test_JsonRC6Compat
+    Test_ReaderCoercions
+End Sub
+
+Private Sub Test_ReaderCoercions()
+    Dim oCnn            As cConnection
+    Dim oRs             As cRecordset
+    Dim oRs2            As cRecordset
+    Dim baContent()     As Byte
+    Dim sJson           As String
+    Dim vRows           As Variant
+
+    If Not TestBegin("cRecordset.ReaderCoercions") Then Exit Sub
+    On Error GoTo EH
+    Set oCnn = New cConnection
+    oCnn.CreateNewDB ":memory:"
+    '--- INTEGER columns type by their load-time width class (RC6-probed)
+    oCnn.Execute "CREATE TABLE w(a INTEGER, b INTEGER, c INTEGER, id INTEGER PRIMARY KEY)"
+    oCnn.Execute "INSERT INTO w VALUES(1, 1, 1, 1), (200, 70000, 9007199254740993, 2)"
+    Set oRs = oCnn.OpenRecordset("SELECT a, b, c, id FROM w ORDER BY id")
+    AssertEqStr TypeName(oRs.Fields("a").Value), "Byte", "width-1 column reads Byte"
+    AssertEqStr TypeName(oRs.Fields("b").Value), "Long", "width-4 column reads Long"
+    AssertEqLng VarType(oRs.Fields("c").Value), 20, "width-8 column reads VT_I8 even for small values"
+    AssertEqStr TypeName(oRs.Fields("id").Value), "Long", "pk column is at least width 4"
+    AssertTrue CDec(oRs.ValueMatrix(1, 2)) = CDec("9007199254740993"), "int64 keeps precision"
+    '--- DATE flavors: text and VB-serial numeric storage, bogus text -> Empty
+    oCnn.Execute "CREATE TABLE d(d1 DATE, d2 DATETIME, d3 TIMESTAMP, b1 BIT, b2 BOOLEAN)"
+    oCnn.Execute "INSERT INTO d VALUES('2020-02-01', '2020-02-01 10:30:00', 44562.4375, 1, 0)"
+    oCnn.Execute "INSERT INTO d VALUES('bogus', NULL, NULL, 2, -1)"
+    Set oRs = oCnn.OpenRecordset("SELECT * FROM d")
+    AssertTrue oRs.Fields("d1").Value = DateSerial(2020, 2, 1), "DATE text coerces to Date"
+    AssertTrue oRs.Fields("d2").Value = DateSerial(2020, 2, 1) + TimeSerial(10, 30, 0), "DATETIME text coerces to Date"
+    AssertTrue oRs.Fields("d3").Value = CDate(44562.4375), "numeric date storage is a VB serial"
+    AssertEqStr TypeName(oRs.Fields("b1").Value), "Boolean", "BIT coerces to Boolean"
+    AssertTrue oRs.Fields("b1").Value, "BIT 1 is True"
+    AssertTrue Not oRs.Fields("b2").Value, "BOOLEAN 0 is False"
+    oRs.MoveNext
+    AssertTrue IsEmpty(oRs.Fields("d1").Value), "unparsable date text reads Empty"
+    AssertTrue oRs.Fields("b1").Value, "BIT 2 is True"
+    AssertTrue Not oRs.Fields("b2").Value, "BIT -1 is False (RC6: value >= 1)"
+    '--- JSON: booleans as literals, dates as quoted raw values
+    Set oRs = oCnn.OpenRecordset("SELECT d2, d3, b1 FROM d WHERE b1 = 1")
+    sJson = FromUtf8Array(oRs.ToJSONUTF8())
+    AssertTrue InStr(sJson, """2020-02-01 10:30:00"",  ""44562.4375"",  true") > 0, "JSON keeps raw dates and boolean literals"
+    '--- Content round-trip preserves the coercions
+    baContent = oRs.Content
+    Set oRs2 = New cRecordset
+    oRs2.Content = baContent
+    AssertTrue oRs2.Fields("d2").Value = DateSerial(2020, 2, 1) + TimeSerial(10, 30, 0), "date survives Content round-trip"
+    AssertEqStr TypeName(oRs2.Fields("b1").Value), "Boolean", "boolean survives Content round-trip"
+    '--- GetRows carries the coerced values
+    vRows = oRs.GetRows()
+    AssertEqStr TypeName(vRows(2, 0)), "Boolean", "GetRows returns coerced cells"
+    TestEnd
+    Exit Sub
+EH:
+    TestErr
 End Sub
 
 Private Function pvSeededDb() As cConnection
@@ -654,6 +710,8 @@ Private Sub Test_ContentRC6Compat()
         "INSERT INTO t VALUES(5), (1), (9)", "SELECT MAX(v) AS mx, MIN(v) AS mn, COUNT(*) AS cnt FROM t"
     pvCompatCase "agg_group", "CREATE TABLE t(g TEXT, v REAL)", _
         "INSERT INTO t VALUES('a', 1.5), ('a', 2.5), ('b', 10)", "SELECT g, SUM(v) AS s, AVG(v) AS av FROM t GROUP BY g ORDER BY g"
+    pvCompatCase "date_bit", "CREATE TABLE t(id INTEGER PRIMARY KEY, d DATETIME, b BIT)", _
+        "INSERT INTO t VALUES(1, '2020-02-01 10:30:00', 1), (2, 44562.4375, 0), (3, NULL, NULL)", "SELECT id, d, b FROM t ORDER BY id"
     '--- metadata survives an RC6 load of a TC6 blob
     Set oCnn = New cConnection
     oCnn.CreateNewDB ":memory:"

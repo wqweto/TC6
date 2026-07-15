@@ -464,10 +464,28 @@ type. `cTestHost` is `MultiUse`.
         fire per table/row/index (RC6's exact event timing is not
         COM-observable — unverified). Storage-level compat pinned by
         quote()-dumps of both engines' converted files.
-      - NB: RC6's recordset *reader* coerces values by decltype/width
-        (DATE → Date, BIT → Boolean, small non-pk INTEGER → Byte) — TC6
-        returns Long/String for these; divergence noted, revisit if
-        needed.
+      - NB: RC6's recordset reader coerces values by decltype/width — now
+        implemented in TC6, see "Reader value coercions" below.
+
+- [x] Reader value coercions (probed against RC6 6.0.15, pinned by
+      `ReaderCoercions` + the `date_bit` Content byte-compat case).
+      Raw cells stay untouched; coercion happens **at access time**
+      (`Fields().Value`, `ValueMatrix`, `GetRows*`) per column:
+      - INTEGER columns type by their **load-time width class** (same
+        rules as the Content W): W=1 → `Byte`, W=4 → `Long`, W=8 →
+        VT_I8 **even for small values**; the pk column is always ≥ 4.
+      - decltype containing DATE/TIME → `Date`; numeric storage is a
+        **VB date serial** (not julian); unparsable text reads `Empty`.
+      - decltype containing BIT/BOOL → `Boolean` = (value >= 1), so 2 →
+        True but **-1 → False** and 0.5 → False.
+      - `ToJSONUTF8` reads raw cells but serializes BIT/BOOL columns as
+        JSON `true`/`false` literals and date columns as **quoted raw
+        values** ("44562.4375"); Sort/Find/UpdateBatch/ChangesOnly all
+        operate on the raw cells.
+      - Content blob type codes: **6 = date** columns with cells stored
+        as raw-value TEXT, **7 = boolean** columns with integer
+        width-class cells; date columns count as text-ish for the
+        ChangesOnly `textColIdx`.
 
 ## RC6 `Content` blob format (reverse-engineered, RC6.dll 6.0.15)
 
@@ -536,6 +554,13 @@ deliberately not pinned anywhere.
 NB: `cConnection.CreateTableFromRsContent` hit a **VB6 codegen bug** —
 assigning a ByRef array *parameter* directly to a `Property Let` crashes at
 runtime (0xC000008F); the parameter must be copied to a local array first.
+
+NB: another **VB6 codegen hazard** — calling a Friend method through a
+Nothing typed reference normally raises error 91, but when the callee's
+prologue grew (frCellValue's coercion call) the aborted call corrupted the
+heap and crashed at process teardown (0xC0000005, layout-sensitive).
+`cField.Value` therefore guards `m_pRs Is Nothing` inline before the
+Friend call (hot path — kept inline, other members rely on the plain 91).
 
 ### `ContentChangesOnly` blob format (changed rows only)
 

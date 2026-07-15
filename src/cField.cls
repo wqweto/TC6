@@ -168,10 +168,16 @@ End Property
 
 Public Property Get Value() As Variant
 Attribute Value.VB_UserMemId = 0
+    If m_pRs Is Nothing Then
+        Err.Raise 91
+    End If
     Value = m_pRs.frCellValue(m_lCol)
 End Property
 
 Public Property Let Value(RHS As Variant)
+    If m_pRs Is Nothing Then
+        Err.Raise 91
+    End If
     m_pRs.frSetCellValue m_lCol, RHS
 End Property
 
