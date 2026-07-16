@@ -328,6 +328,14 @@ API smoke-check is now covered by `cConnection.CreateAndInsert`). Current run:
   **per class** holds that class's `Test_*` subs + a public `RunXxxTests` entry
   that `cTestHost.RunTests` calls. Add a new module + one call for each class.
 - [test/run_tests.vbs](test/run_tests.vbs) — convenience driver (see below).
+- [test/TestRunnerBin.vbp](test/TestRunnerBin.vbp) — the **same test modules
+  compiled against the registered release `TC6SQLite.dll`** (typelib
+  reference instead of source classes), project name `TC6SQLiteTestBin`;
+  `run_tests.vbs /bin` drives it. Exercises the statically linked SQLite in
+  the shipped binary rather than winsqlite3. The only shims needed
+  ([test/mdBinShims.bas](test/mdBinShims.bas)): `FromUtf8Array` and the
+  `Public Enum LongPtr` x86 trick (both live in bas modules, which don't
+  make it into the typelib) — the tests otherwise use only public API.
 
 **Build (headless):** `Start-Process VB6.EXE -ArgumentList '/make',<vbp>,'/out',
 <log> -Wait` — VB6 is GUI-subsystem so the shell must wait; the `/out` log is

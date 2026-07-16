@@ -62,11 +62,17 @@ The suite is an ActiveX DLL (`TC6SQLiteTest.cTestHost`) driven by a 32-bit
 script host; the process exit code is the failed-test count:
 
 ```bat
-C:\Windows\SysWOW64\cscript.exe //nologo test\run_tests.vbs [/out:log-file] [/filter:tokens]
+C:\Windows\SysWOW64\cscript.exe //nologo test\run_tests.vbs [/out:log-file] [/filter:tokens] [/bin]
 ```
 
 The `ContentRC6Compat` test cross-checks blob compatibility against the real
 RC6.dll and expects it registered on the machine; it is skipped otherwise.
+
+The same suite can also target the **compiled** `TC6SQLite.dll` (with its
+statically linked SQLite) instead of the sources: build
+[test/TestRunnerBin.vbp](test/TestRunnerBin.vbp) — the same test modules
+referencing the registered release DLL's typelib — and pass `/bin` to
+`run_tests.vbs`.
 
 ## Compatibility notes
 
