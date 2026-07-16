@@ -9,6 +9,46 @@ Private Const CP_UTF8                       As Long = 65001
 '--- int64 VARIANT type (no VB6 vbLongLong constant)
 Private Const VT_I8                         As Integer = 20
 
+'--- ADO DataTypeEnum subset (late-bound, no ADO reference)
+Public Enum eAdoDataType
+    adSmallInt = 2
+    adInteger = 3
+    adSingle = 4
+    adDouble = 5
+    adCurrency = 6
+    adDate = 7
+    adBoolean = 11
+    adDecimal = 14
+    adTinyInt = 16
+    adUnsignedTinyInt = 17
+    adUnsignedSmallInt = 18
+    adUnsignedInt = 19
+    adBigInt = 20
+    adUnsignedBigInt = 21
+    adBinary = 128
+    adChar = 129
+    adWChar = 130
+    adNumeric = 131
+    adDBDate = 133
+    adDBTime = 134
+    adDBTimeStamp = 135
+    adVarNumeric = 139
+    adVarChar = 200
+    adVarWChar = 202
+    adLongVarWChar = 203
+    adVarBinary = 204
+    adLongVarBinary = 205
+End Enum
+
+'--- ADO FieldAttributeEnum subset
+Public Enum eAdoFieldAttrib
+    adFldUpdatable = 4
+    adFldFixed = &H10
+    adFldIsNullable = &H20
+    adFldLong = &H80
+    adFldKeyColumn = &H8000&
+End Enum
+
 Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
 Private Declare Function WideCharToMultiByte Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, ByVal lpWideCharStr As Long, ByVal cchWideChar As Long, lpMultiByteStr As Any, ByVal cchMultiByte As Long, ByVal lpDefaultChar As Long, ByVal lpUsedDefaultChar As Long) As Long
 Private Declare Function MultiByteToWideChar Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, lpMultiByteStr As Any, ByVal cchMultiByte As Long, ByVal lpWideCharStr As Long, ByVal cchWideChar As Long) As Long
@@ -228,38 +268,11 @@ Private Function pvSavedTableExists(oCnn As cConnection, sTable As String) As Bo
     pvSavedTableExists = (oRs.Fields(0).Value > 0)
 End Function
 
-Public Function AdoTypeToDeclType(ByVal lAdoType As Long, Optional ByVal lCharMaxLen As Long) As String
-    Const adSmallInt                        As Long = 2
-    Const adInteger                         As Long = 3
-    Const adSingle                          As Long = 4
-    Const adDouble                          As Long = 5
-    Const adCurrency                        As Long = 6
-    Const adDate                            As Long = 7
-    Const adBoolean                         As Long = 11
-    Const adDecimal                         As Long = 14
-    Const adTinyInt                         As Long = 16
-    Const adUnsignedTinyInt                 As Long = 17
-    Const adUnsignedSmallInt                As Long = 18
-    Const adUnsignedInt                     As Long = 19
-    Const adBigInt                          As Long = 20
-    Const adUnsignedBigInt                  As Long = 21
-    Const adBinary                          As Long = 128
-    Const adChar                            As Long = 129
-    Const adWChar                           As Long = 130
-    Const adNumeric                         As Long = 131
-    Const adDBDate                          As Long = 133
-    Const adDBTime                          As Long = 134
-    Const adDBTimeStamp                     As Long = 135
-    Const adVarNumeric                      As Long = 139
-    Const adVarChar                         As Long = 200
-    Const adVarWChar                        As Long = 202
-    Const adVarBinary                       As Long = 204
-    Const adLongVarBinary                   As Long = 205
-
+Public Function AdoTypeToDeclType(ByVal eAdoType As eAdoDataType, Optional ByVal lCharMaxLen As Long) As String
     '--- RC6 mapping (verified against RC6.dll 6.0.15 via the converter
     '--- tests); column sizes appear only on the converter path, which
     '--- passes CHARACTER_MAXIMUM_LENGTH from the columns schema rowset
-    Select Case lAdoType
+    Select Case eAdoType
     Case adSmallInt, adInteger, adTinyInt, adUnsignedTinyInt, adUnsignedSmallInt, adUnsignedInt, adBigInt, adUnsignedBigInt
         AdoTypeToDeclType = "INTEGER"
     Case adBoolean
@@ -282,7 +295,6 @@ Public Function AdoTypeToDeclType(ByVal lAdoType As Long, Optional ByVal lCharMa
 End Function
 
 Public Sub CopyAdoRsToTable(oCnn As cConnection, sTable As String, oAdoRs As Object, vDataTypes As Variant, ByVal bNoCase As Boolean, cPkNames As VBA.Collection, Optional oProgress As cConverter)
-    Const adFldKeyColumn                    As Long = &H8000&
     Dim oFld            As Object
     Dim lCol            As Long
     Dim lCount          As Long

@@ -48,6 +48,9 @@ Public Event Delete(ByVal NewRowIdxZeroBased As Long)
 Public Event QueryFinished()
 Public Event Reset()
 
+'--- int64 VARIANT type (no VB6 vbLongLong constant)
+Private Const VT_I8                         As Integer = 20
+
 Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
 Private Declare Function CryptBinaryToString Lib "crypt32" Alias "CryptBinaryToStringW" (pbBinary As Any, ByVal cbBinary As Long, ByVal dwFlags As Long, ByVal pszString As LongPtr, pcchString As Long) As Long
 
@@ -55,6 +58,32 @@ Private Enum eRowState
     ROW_CLEAN = 0
     ROW_MODIFIED = 1
     ROW_NEW = 2
+End Enum
+
+'--- RC6 Content blob column type codes (see NOTES)
+Private Enum eDeclType
+    TYPE_INTEGER = 1
+    TYPE_FLOAT = 2
+    TYPE_TEXT = 3
+    TYPE_BLOB = 4
+    TYPE_DATE = 6
+    TYPE_BOOLEAN = 7
+End Enum
+
+'--- access-time value coercion kinds (RC6 reader semantics, see NOTES)
+Private Enum eCoerceKind
+    COERCE_NONE = 0
+    COERCE_DATE = 1
+    COERCE_BOOLEAN = 2
+    COERCE_BYTE = 3
+    COERCE_INT64 = 4
+End Enum
+
+'--- ContentChangesOnly pending-op kinds
+Private Enum eChangeOp
+    CHG_DELETE = 0
+    CHG_UPDATE = 1
+    CHG_INSERT = 2
 End Enum
 
 Private Enum eFindOp
@@ -110,7 +139,7 @@ Private m_lNextLabel                As Long
 Private m_lLoadedRows               As Long
 '--- per-column access-time coercion kind (RC6 semantics, see NOTES):
 '--- 0 = none, 1 = date, 2 = boolean, 3 = byte width, 4 = int64 width
-Private m_aColCoerce()              As Long
+Private m_aColCoerce()              As eCoerceKind
 '--- pending ops loaded from a ContentChangesOnly blob (see NOTES format)
 Private m_lChgCellCount             As Long
 Private m_aChgCellRow()             As Long
@@ -603,59 +632,50 @@ Public Function DataSource() As Object
 End Function
 
 Public Function GetADORsFromContent() As Object
-    Const adInteger     As Long = 3
-    Const adDouble      As Long = 5
-    Const adDecimal     As Long = 14
-    Const adLongVarWChar As Long = 203
-    Const adLongVarBinary As Long = 205
-    Const adFldFixed    As Long = &H10
-    Const adFldIsNullable As Long = &H20
-    Const adFldUpdatable As Long = 4
-    Const adFldLong     As Long = &H80
-    Const adFldKeyColumn As Long = &H8000&
-    Const VT_I8         As Integer = 20
     Dim oArs            As Object
     Dim lCol            As Long
     Dim lRow            As Long
-    Dim lType           As Long
-    Dim lAttrib         As Long
+    Dim eType           As eDeclType
+    Dim eAdoType        As eAdoDataType
+    Dim eAttrib         As eAdoFieldAttrib
     Dim oColumn         As cColumn
     Dim vValue          As Variant
 
     Set oArs = CreateObject("ADODB.Recordset")
     For lCol = 0 To m_lFieldCount - 1
-        lType = pvDeclTypeCode(m_aDeclType(lCol))
+        eType = pvDeclTypeCode(m_aDeclType(lCol))
         If Len(m_aDeclType(lCol)) = 0 Then
-            lType = pvValueTypeCode(lCol)
+            eType = pvValueTypeCode(lCol)
         End If
         Set oColumn = frColSchema(lCol)
-        lAttrib = adFldUpdatable Or adFldIsNullable
-        Select Case lType
-        Case 1
+        eAttrib = adFldUpdatable Or adFldIsNullable
+        eAdoType = 0
+        Select Case eType
+        Case TYPE_INTEGER
             If Not oColumn Is Nothing Then
                 If oColumn.PrimaryKey Then
-                    lType = adInteger
-                    lAttrib = lAttrib Or adFldFixed Or adFldKeyColumn
+                    eAdoType = adInteger
+                    eAttrib = eAttrib Or adFldFixed Or adFldKeyColumn
                 End If
             End If
-            If lType = 1 Then
-                lType = adDecimal
-                lAttrib = lAttrib Or adFldFixed
+            If eAdoType = 0 Then
+                eAdoType = adDecimal
+                eAttrib = eAttrib Or adFldFixed
             End If
-        Case 2
-            lType = adDouble
-            lAttrib = lAttrib Or adFldFixed
-        Case 4
-            lType = adLongVarBinary
-            lAttrib = lAttrib Or adFldLong
+        Case TYPE_FLOAT
+            eAdoType = adDouble
+            eAttrib = eAttrib Or adFldFixed
+        Case TYPE_BLOB
+            eAdoType = adLongVarBinary
+            eAttrib = eAttrib Or adFldLong
         Case Else
-            lType = adLongVarWChar
-            lAttrib = lAttrib Or adFldLong
+            eAdoType = adLongVarWChar
+            eAttrib = eAttrib Or adFldLong
         End Select
-        If lType = adLongVarWChar Or lType = adLongVarBinary Then
-            oArs.Fields.Append m_aFieldName(lCol), lType, -1, lAttrib
+        If eAdoType = adLongVarWChar Or eAdoType = adLongVarBinary Then
+            oArs.Fields.Append m_aFieldName(lCol), eAdoType, -1, eAttrib
         Else
-            oArs.Fields.Append m_aFieldName(lCol), lType, 0, lAttrib
+            oArs.Fields.Append m_aFieldName(lCol), eAdoType, 0, eAttrib
         End If
     Next
     oArs.Open
@@ -1876,7 +1896,7 @@ Private Function pvContentWrite() As Byte()
     Dim lRows           As Long
     Dim lCol            As Long
     Dim lRow            As Long
-    Dim lType           As Long
+    Dim eType           As eDeclType
     Dim lWidth          As Long
     Dim oColumn         As cColumn
     Dim sText           As String
@@ -1923,7 +1943,7 @@ Private Function pvContentWrite() As Byte()
     '--- fields
     pvPutLong baOut, lPos, m_lFieldCount
     For lCol = 0 To m_lFieldCount - 1
-        pvWriteFieldMeta baOut, lPos, lCol, aTabCol, lTables, lType, lWidth
+        pvWriteFieldMeta baOut, lPos, lCol, aTabCol, lTables, eType, lWidth
         '--- per-row not-null flags (one spare element)
         pvPutLong baOut, lPos, lRows + 1
         For lRow = 0 To lRows - 1
@@ -1931,15 +1951,15 @@ Private Function pvContentWrite() As Byte()
         Next
         pvPutByte baOut, lPos, 0
         '--- cell data
-        Select Case lType
-        Case 1, 7
+        Select Case eType
+        Case TYPE_INTEGER, TYPE_BOOLEAN
             pvPutLong baOut, lPos, (lRows + 1) * lWidth
             For lRow = 0 To lRows - 1
                 pvPutIntCell baOut, lPos, m_aData(lCol, lRow), lWidth
             Next
             pvPutZeros baOut, lPos, lWidth
             pvPutLong baOut, lPos, 0
-        Case 2
+        Case TYPE_FLOAT
             pvPutLong baOut, lPos, (lRows + 1) * 8
             For lRow = 0 To lRows - 1
                 pvPutDouble baOut, lPos, pvCellDbl(m_aData(lCol, lRow))
@@ -1950,11 +1970,11 @@ Private Function pvContentWrite() As Byte()
             '--- TEXT/BLOB: concatenated content + rows+1 start offsets
             lTotal = 0
             For lRow = 0 To lRows - 1
-                lTotal = lTotal + pvCellBytesLen(m_aData(lCol, lRow), lType)
+                lTotal = lTotal + pvCellBytesLen(m_aData(lCol, lRow), eType)
             Next
             pvPutLong baOut, lPos, lTotal
             For lRow = 0 To lRows - 1
-                baCell = pvCellBytes(m_aData(lCol, lRow), lType)
+                baCell = pvCellBytes(m_aData(lCol, lRow), eType)
                 If pvBytesLen(baCell) > 0 Then
                     pvPutBytes baOut, lPos, baCell
                 End If
@@ -1963,7 +1983,7 @@ Private Function pvContentWrite() As Byte()
             lOffs = 0
             For lRow = 0 To lRows - 1
                 pvPutLong baOut, lPos, lOffs
-                lOffs = lOffs + pvCellBytesLen(m_aData(lCol, lRow), lType)
+                lOffs = lOffs + pvCellBytesLen(m_aData(lCol, lRow), eType)
             Next
             pvPutLong baOut, lPos, lOffs
         End Select
@@ -2002,10 +2022,11 @@ Private Function pvCollectTables(aTabCol() As Long) As Long
     pvCollectTables = lTables
 End Function
 
-Private Sub pvWriteFieldMeta(baOut() As Byte, lPos As Long, ByVal lCol As Long, aTabCol() As Long, ByVal lTables As Long, lType As Long, lWidth As Long, Optional ByVal bLoadedOnly As Boolean)
+Private Sub pvWriteFieldMeta(baOut() As Byte, lPos As Long, ByVal lCol As Long, aTabCol() As Long, ByVal lTables As Long, eType As eDeclType, lWidth As Long, Optional ByVal bLoadedOnly As Boolean)
     Dim oColumn         As cColumn
     Dim sText           As String
     Dim lIdx            As Long
+    Dim lTabIdx         As Long
 
     Set oColumn = frColSchema(lCol)
     If Len(m_aOrigTable(lCol)) > 0 Then
@@ -2040,14 +2061,14 @@ Private Sub pvWriteFieldMeta(baOut() As Byte, lPos As Long, ByVal lCol As Long, 
     End If
     pvPutStr baOut, lPos, m_aFieldName(lCol)
     '--- fixed block: origin table index + column ordinal + flags
-    lType = 0
+    lTabIdx = 0
     For lIdx = 0 To lTables - 1
         If StrComp(m_aOrigTable(aTabCol(lIdx)), m_aOrigTable(lCol), vbTextCompare) = 0 Then
-            lType = lIdx
+            lTabIdx = lIdx
             Exit For
         End If
     Next
-    pvPutLong baOut, lPos, lType
+    pvPutLong baOut, lPos, lTabIdx
     pvPutLong baOut, lPos, lCol                     '--- column ordinal
     If oColumn Is Nothing Then
         pvPutByte baOut, lPos, 0
@@ -2059,16 +2080,16 @@ Private Sub pvWriteFieldMeta(baOut() As Byte, lPos As Long, ByVal lCol As Long, 
         pvPutByte baOut, lPos, IIf(oColumn.PrimaryKey, 1, 0)
         pvPutByte baOut, lPos, IIf(oColumn.PrimaryAutoIncrement, 1, 0)
     End If
-    lType = pvDeclTypeCode(m_aDeclType(lCol))
+    eType = pvDeclTypeCode(m_aDeclType(lCol))
     If Len(m_aDeclType(lCol)) = 0 Then
         '--- expression columns type by value storage class (RC6: text
         '--- stays text, blobs stay blobs, all numerics become doubles)
-        lType = pvValueTypeCode(lCol)
+        eType = pvValueTypeCode(lCol)
     End If
-    pvPutLong baOut, lPos, lType
+    pvPutLong baOut, lPos, eType
     pvPutByte baOut, lPos, 0
     lWidth = 0
-    If lType = 1 Or lType = 7 Then
+    If eType = TYPE_INTEGER Or eType = TYPE_BOOLEAN Then
         lWidth = pvIntWidth(lCol, bLoadedOnly)
     End If
     pvPutLong baOut, lPos, lWidth
@@ -2106,7 +2127,7 @@ Private Function pvContentWriteChanges() As Byte()
     Dim lPos            As Long
     Dim lCol            As Long
     Dim lRow            As Long
-    Dim lType           As Long
+    Dim eType           As eDeclType
     Dim lWidth          As Long
     Dim aTabCol()       As Long
     Dim lTables         As Long
@@ -2133,7 +2154,7 @@ Private Function pvContentWriteChanges() As Byte()
     Dim lHi             As Long
     Dim bPointer        As Boolean
     Dim aOpLabel()      As Long
-    Dim aOpKind()       As Long
+    Dim aOpKind()       As eChangeOp
     Dim aOpRow()        As Long
     Dim aOpPk()         As Variant
     Dim lOps            As Long
@@ -2142,7 +2163,7 @@ Private Function pvContentWriteChanges() As Byte()
         Err.Raise vbObjectError, "cRecordset", "Recordset is not updatable"
     End If
     lKeyCol = m_aPkCols(0)
-    bTextPk = (pvDeclTypeCode(m_aDeclType(lKeyCol)) >= 3)
+    bTextPk = pvIsTextishCol(lKeyCol)
     lMax = m_lRecordCount * m_lFieldCount + 16
     If Not m_cDeleted Is Nothing Then
         lMax = lMax + m_cDeleted.Count
@@ -2158,38 +2179,38 @@ Private Function pvContentWriteChanges() As Byte()
     '--- collect delete/modify/insert ops sorted by physical row label (RC6
     '--- emission order); deletes carry their snapshotted label
     ReDim aOpLabel(0 To lMax) As Long
-    ReDim aOpKind(0 To lMax) As Long
+    ReDim aOpKind(0 To lMax) As eChangeOp
     ReDim aOpRow(0 To lMax) As Long
     ReDim aOpPk(0 To lMax) As Variant
     If Not m_cDeleted Is Nothing Then
         For Each vEntry In m_cDeleted
             aPk = vEntry(1)
-            pvChgAddOp aOpLabel, aOpKind, aOpRow, aOpPk, lOps, CLng(vEntry(5)), 0, 0, aPk(0)
+            pvChgAddOp aOpLabel, aOpKind, aOpRow, aOpPk, lOps, CLng(vEntry(5)), CHG_DELETE, 0, aPk(0)
         Next
     End If
     If m_bWriteState Then
         For lRow = 0 To m_lRecordCount - 1
             Select Case m_aRowState(lRow)
             Case ROW_MODIFIED
-                pvChgAddOp aOpLabel, aOpKind, aOpRow, aOpPk, lOps, m_aRowLabel(lRow), 1, lRow, pvPkWhereValue(lRow, 0)
+                pvChgAddOp aOpLabel, aOpKind, aOpRow, aOpPk, lOps, m_aRowLabel(lRow), CHG_UPDATE, lRow, pvPkWhereValue(lRow, 0)
             Case ROW_NEW
-                pvChgAddOp aOpLabel, aOpKind, aOpRow, aOpPk, lOps, m_aRowLabel(lRow), 2, lRow, Empty
+                pvChgAddOp aOpLabel, aOpKind, aOpRow, aOpPk, lOps, m_aRowLabel(lRow), CHG_INSERT, lRow, Empty
             End Select
         Next
     End If
     For lIdx = 0 To lOps - 1
         lRow = aOpRow(lIdx)
         Select Case aOpKind(lIdx)
-        Case 0
+        Case CHG_DELETE
             aSlot(lCells) = aOpLabel(lIdx) * 512
-            aVt(lCells) = 6
+            aVt(lCells) = vbCurrency
             aLo(lCells) = DEL_MAGIC_LO
             aHi(lCells) = DEL_MAGIC_HI
             lCells = lCells + 1
             aRowIdx(lRowsC) = aOpLabel(lIdx)
             aRowPk(lRowsC) = aOpPk(lIdx)
             lRowsC = lRowsC + 1
-        Case 1
+        Case CHG_UPDATE
             For lCol = 0 To m_lFieldCount - 1
                 If m_aDirty(lCol, lRow) Then
                     pvChgPutCell m_aData(lCol, lRow), aOpLabel(lIdx), lCol, lKeyCol, aSlot, aVt, aLo, aHi, lCells, baStream, lStream
@@ -2198,7 +2219,7 @@ Private Function pvContentWriteChanges() As Byte()
             aRowIdx(lRowsC) = aOpLabel(lIdx)
             aRowPk(lRowsC) = aOpPk(lIdx)
             lRowsC = lRowsC + 1
-        Case 2
+        Case CHG_INSERT
             '--- inserts carry only the assigned cells; an unassigned pk gets
             '--- the "use default" magic so the loader lets SQLite assign it
             For lCol = 0 To m_lFieldCount - 1
@@ -2206,7 +2227,7 @@ Private Function pvContentWriteChanges() As Byte()
                     pvChgPutCell m_aData(lCol, lRow), aOpLabel(lIdx), lCol, lKeyCol, aSlot, aVt, aLo, aHi, lCells, baStream, lStream
                 ElseIf lCol = lKeyCol Then
                     aSlot(lCells) = aOpLabel(lIdx) * 512 + lCol
-                    aVt(lCells) = 6
+                    aVt(lCells) = vbCurrency
                     aLo(lCells) = DEF_MAGIC_LO
                     aHi(lCells) = DEL_MAGIC_HI
                     lCells = lCells + 1
@@ -2226,7 +2247,7 @@ Private Function pvContentWriteChanges() As Byte()
     lTables = pvCollectTables(aTabCol)
     pvPutLong baOut, lPos, m_lFieldCount
     For lCol = 0 To m_lFieldCount - 1
-        pvWriteFieldMeta baOut, lPos, lCol, aTabCol, lTables, lType, lWidth, True
+        pvWriteFieldMeta baOut, lPos, lCol, aTabCol, lTables, eType, lWidth, True
     Next
     pvWriteDmlSets baOut, lPos, aTabCol, lTables
     '--- cell slot ids + records + shared text stream
@@ -2237,7 +2258,7 @@ Private Function pvContentWriteChanges() As Byte()
     pvPutZeros baOut, lPos, 16
     For lIdx = 0 To lCells - 1
         pvPutLong baOut, lPos, aVt(lIdx)
-        pvPutLong baOut, lPos, IIf(aVt(lIdx) = 6, 2, 0)
+        pvPutLong baOut, lPos, IIf(aVt(lIdx) = vbCurrency, 2, 0)
         pvPutLong baOut, lPos, aLo(lIdx)
         pvPutLong baOut, lPos, aHi(lIdx)
     Next
@@ -2287,7 +2308,7 @@ Private Function pvContentWriteChanges() As Byte()
     pvContentWriteChanges = baOut
 End Function
 
-Private Sub pvChgAddOp(aOpLabel() As Long, aOpKind() As Long, aOpRow() As Long, aOpPk() As Variant, lOps As Long, ByVal lLabel As Long, ByVal lKind As Long, ByVal lRow As Long, vPk As Variant)
+Private Sub pvChgAddOp(aOpLabel() As Long, aOpKind() As eChangeOp, aOpRow() As Long, aOpPk() As Variant, lOps As Long, ByVal lLabel As Long, ByVal eKind As eChangeOp, ByVal lRow As Long, vPk As Variant)
     Dim lIdx            As Long
 
     lIdx = lOps
@@ -2302,7 +2323,7 @@ Private Sub pvChgAddOp(aOpLabel() As Long, aOpKind() As Long, aOpRow() As Long, 
         lIdx = lIdx - 1
     Loop
     aOpLabel(lIdx) = lLabel
-    aOpKind(lIdx) = lKind
+    aOpKind(lIdx) = eKind
     aOpRow(lIdx) = lRow
     aOpPk(lIdx) = vPk
     lOps = lOps + 1
@@ -2327,7 +2348,6 @@ Private Sub pvChgPutCell(vValue As Variant, ByVal lRow As Long, ByVal lCol As Lo
 End Sub
 
 Private Sub pvChgEncodeValue(vValue As Variant, lVt As Long, lLo As Long, lHi As Long, baStream() As Byte, lStream As Long, bPointer As Boolean)
-    Const VT_I8         As Integer = 20
     Dim baCell()        As Byte
     Dim sText           As String
     Dim dblValue        As Double
@@ -2342,36 +2362,35 @@ Private Sub pvChgEncodeValue(vValue As Variant, lVt As Long, lLo As Long, lHi As
     Select Case VarType(vValue)
     Case vbByte Or vbArray
         baCell = vValue
-        lVt = 3
+        lVt = vbLong
         lLo = pvBytesLen(baCell)
         pvChgAppendBytes baStream, lStream, baCell
         bPointer = True
     Case vbString
         sText = vValue
-        lVt = 3
+        lVt = vbLong
         lLo = -LenB(sText)
         baCell = sText
         pvChgAppendBytes baStream, lStream, baCell
         bPointer = True
     Case vbInteger
-        lVt = 2
+        lVt = vbInteger
         lLo = CLng(vValue) And &HFFFF&
     Case vbLong, vbByte, vbBoolean
-        lVt = 3
+        lVt = vbLong
         lLo = CLng(vValue)
     Case vbCurrency, vbDecimal, VT_I8
-        lVt = 14
+        lVt = vbDecimal
         pvChgLow8 vValue, lLo, lHi
     Case Else
         dblValue = CDbl(vValue)
-        lVt = 5
+        lVt = vbDouble
         Call CopyMemory(lLo, dblValue, 4)
         Call CopyMemory(lHi, ByVal VarPtr(dblValue) + 4, 4)
     End Select
 End Sub
 
 Private Sub pvChgLow8(vValue As Variant, lLo As Long, lHi As Long)
-    Const VT_I8         As Integer = 20
     Dim vDec            As Variant
 
     If VarType(vValue) = VT_I8 Then
@@ -2412,7 +2431,7 @@ End Function
 
 Private Function pvIsTextishCol(ByVal lCol As Long) As Boolean
     Select Case pvDeclTypeCode(m_aDeclType(lCol))
-    Case 3, 4, 6
+    Case TYPE_TEXT, TYPE_BLOB, TYPE_DATE
         pvIsTextishCol = True
     End Select
 End Function
@@ -2532,21 +2551,21 @@ Private Sub pvContentReadChanges(baContent() As Byte)
             m_aChgCellRow(lIdx) = aSlot(lIdx) \ 512
             m_aChgCellCol(lIdx) = aSlot(lIdx) Mod 512
             Select Case aVt(lIdx)
-            Case 0, 1
+            Case vbEmpty, vbNull
                 m_aChgCellValue(lIdx) = pvNullCell()
-            Case 2
+            Case vbInteger
                 Call CopyMemory(nVal, aLo(lIdx), 2)
                 m_aChgCellValue(lIdx) = CLng(nVal)
-            Case 3
+            Case vbLong
                 m_aChgCellValue(lIdx) = aLo(lIdx)
-            Case 4
+            Case vbSingle
                 Call CopyMemory(sngVal, aLo(lIdx), 4)
                 m_aChgCellValue(lIdx) = sngVal
-            Case 5, 7
+            Case vbDouble, vbDate
                 Call CopyMemory(dblVal, aLo(lIdx), 4)
                 Call CopyMemory(ByVal VarPtr(dblVal) + 4, aHi(lIdx), 4)
                 m_aChgCellValue(lIdx) = dblVal
-            Case 6
+            Case vbCurrency
                 If aLo(lIdx) = DEL_MAGIC_LO And aHi(lIdx) = DEL_MAGIC_HI Then
                     m_aChgCellCol(lIdx) = -1
                 ElseIf aLo(lIdx) = DEF_MAGIC_LO And aHi(lIdx) = DEL_MAGIC_HI Then
@@ -2576,7 +2595,7 @@ Private Sub pvContentReadChanges(baContent() As Byte)
         ReDim aHi(0 To lRowsC - 1) As Long
     End If
     If m_lChgKeyCol >= 0 Then
-        bTextPk = (pvDeclTypeCode(m_aDeclType(m_lChgKeyCol)) >= 3)
+        bTextPk = pvIsTextishCol(m_lChgKeyCol)
     End If
     For lIdx = 0 To lRowsC - 1
         lVal = pvGetLong(baContent, lPos)
@@ -2598,7 +2617,7 @@ Private Sub pvContentReadChanges(baContent() As Byte)
     For lIdx = 0 To lRowsC - 1
         If bTextPk Then
             m_aChgRowPk(lIdx) = pvChgSlice(baContent, lPos, Abs(aLo(lIdx)), aLo(lIdx) > 0)
-        ElseIf aVt(lIdx) = 14 Or aVt(lIdx) = 20 Then
+        ElseIf aVt(lIdx) = vbDecimal Or aVt(lIdx) = VT_I8 Then
             m_aChgRowPk(lIdx) = pvChgInt64(aLo(lIdx), aHi(lIdx))
         Else
             m_aChgRowPk(lIdx) = aLo(lIdx)
@@ -2657,7 +2676,6 @@ Private Function pvChgSlice(baContent() As Byte, lPos As Long, ByVal lSize As Lo
 End Function
 
 Private Function pvChgInt64(ByVal lLo As Long, ByVal lHi As Long) As Variant
-    Const VT_I8         As Integer = 20
     Dim vRet            As Variant
     Dim nVt             As Integer
 
@@ -2766,7 +2784,7 @@ Private Sub pvContentRead(baContent() As Byte)
     Dim lCol            As Long
     Dim lRow            As Long
     Dim lCurRow         As Long
-    Dim lType           As Long
+    Dim eType           As eDeclType
     Dim lWidth          As Long
     Dim sDefault        As String
     Dim sCollate        As String
@@ -2827,7 +2845,7 @@ Private Sub pvContentRead(baContent() As Byte)
         lNotNull = pvGetByte(baContent, lPos)       '--- notnull-or-autoinc
         lPk = pvGetByte(baContent, lPos)
         lAutoInc = pvGetByte(baContent, lPos)
-        lType = pvGetLong(baContent, lPos)
+        eType = pvGetLong(baContent, lPos)
         pvGetByte baContent, lPos
         lWidth = pvGetLong(baContent, lPos)
         If Len(m_aOrigTable(lCol)) > 0 Then
@@ -2848,8 +2866,8 @@ Private Sub pvContentRead(baContent() As Byte)
             aFlags(lRow) = pvGetByte(baContent, lPos)
         Next
         '--- cell data
-        Select Case lType
-        Case 1, 7
+        Select Case eType
+        Case TYPE_INTEGER, TYPE_BOOLEAN
             lCount = pvGetLong(baContent, lPos)
             For lRow = 0 To lRows - 1
                 If aFlags(lRow) = 0 Then
@@ -2861,7 +2879,7 @@ Private Sub pvContentRead(baContent() As Byte)
             Next
             lPos = lPos + lCount - lRows * lWidth   '--- spare element
             pvGetLong baContent, lPos
-        Case 2
+        Case TYPE_FLOAT
             lCount = pvGetLong(baContent, lPos)
             For lRow = 0 To lRows - 1
                 If aFlags(lRow) = 0 Then
@@ -2888,7 +2906,7 @@ Private Sub pvContentRead(baContent() As Byte)
                 If aFlags(lRow) = 0 Then
                     m_aData(lCol, lRow) = pvNullCell()
                 Else
-                    m_aData(lCol, lRow) = pvSliceCell(baText, aOffs(lRow), aOffs(lRow + 1) - aOffs(lRow), lType)
+                    m_aData(lCol, lRow) = pvSliceCell(baText, aOffs(lRow), aOffs(lRow + 1) - aOffs(lRow), eType)
                 End If
             Next
         End Select
@@ -2953,32 +2971,32 @@ Private Sub pvAnalyzeFromSchema()
     End If
     ReDim Preserve m_aPkCols(0 To m_lPkCount - 1) As Long
     If m_lPkCount = 1 Then
-        If pvDeclTypeCode(m_aDeclType(m_aPkCols(0))) = 1 Then
+        If pvDeclTypeCode(m_aDeclType(m_aPkCols(0))) = TYPE_INTEGER Then
             m_lAutoPkCol = m_aPkCols(0)
         End If
     End If
     m_bUpdatable = True
 End Sub
 
-Private Function pvDeclTypeCode(sDeclType As String) As Long
+Private Function pvDeclTypeCode(sDeclType As String) As eDeclType
     Dim sUpper          As String
 
-    '--- SQLite affinity rules collapsed to the RC6 type codes (6 = date
-    '--- with cells as raw-value text, 7 = boolean with integer cells);
+    '--- SQLite affinity rules collapsed to the RC6 type codes (date cells
+    '--- store as raw-value text, boolean cells as width-class integers);
     '--- empty decltype (expression columns) serializes as FLOAT
     sUpper = UCase$(sDeclType)
     If InStr(sUpper, "DATE") > 0 Or InStr(sUpper, "TIME") > 0 Then
-        pvDeclTypeCode = 6
+        pvDeclTypeCode = TYPE_DATE
     ElseIf InStr(sUpper, "BIT") > 0 Or InStr(sUpper, "BOOL") > 0 Then
-        pvDeclTypeCode = 7
+        pvDeclTypeCode = TYPE_BOOLEAN
     ElseIf InStr(sUpper, "INT") > 0 Then
-        pvDeclTypeCode = 1
+        pvDeclTypeCode = TYPE_INTEGER
     ElseIf InStr(sUpper, "CHAR") > 0 Or InStr(sUpper, "CLOB") > 0 Or InStr(sUpper, "TEXT") > 0 Then
-        pvDeclTypeCode = 3
+        pvDeclTypeCode = TYPE_TEXT
     ElseIf InStr(sUpper, "BLOB") > 0 Then
-        pvDeclTypeCode = 4
+        pvDeclTypeCode = TYPE_BLOB
     Else
-        pvDeclTypeCode = 2
+        pvDeclTypeCode = TYPE_FLOAT
     End If
 End Function
 
@@ -3038,17 +3056,17 @@ Private Function pvCollectionHasKey(cColl As VBA.Collection, sKey As String) As 
 QH:
 End Function
 
-Private Function pvValueTypeCode(ByVal lCol As Long) As Long
+Private Function pvValueTypeCode(ByVal lCol As Long) As eDeclType
     Dim lRow            As Long
 
-    pvValueTypeCode = 2
+    pvValueTypeCode = TYPE_FLOAT
     For lRow = 0 To m_lRecordCount - 1
         If Not pvIsNullCell(m_aData(lCol, lRow)) Then
             Select Case VarType(m_aData(lCol, lRow))
             Case vbString
-                pvValueTypeCode = 3
+                pvValueTypeCode = TYPE_TEXT
             Case vbByte + vbArray
-                pvValueTypeCode = 4
+                pvValueTypeCode = TYPE_BLOB
             End Select
             Exit Function
         End If
@@ -3095,12 +3113,12 @@ Private Function pvJsonValue(ByVal lCol As Long, vValue As Variant, ByVal bUniEs
 
     If pvIsNullCell(vValue) Then
         pvJsonValue = "null"
-    ElseIf m_aColCoerce(lCol) = 2 Then
+    ElseIf m_aColCoerce(lCol) = COERCE_BOOLEAN Then
         '--- RC6: BIT/BOOL columns serialize as JSON booleans
         pvJsonValue = IIf(pvCoerceCell(lCol, vValue), "true", "false")
     ElseIf VarType(vValue) = vbString Then
         pvJsonValue = pvJsonString(CStr(vValue), bUniEscaping)
-    ElseIf m_aColCoerce(lCol) = 1 Then
+    ElseIf m_aColCoerce(lCol) = COERCE_DATE Then
         '--- RC6: numeric-stored dates serialize as quoted raw values
         pvJsonValue = """" & pvJsonNumber(vValue) & """"
     ElseIf IsArray(vValue) Then
@@ -3206,27 +3224,26 @@ End Function
 
 Private Sub pvComputeCoercion()
     Dim lCol            As Long
-    Dim sType           As String
 
     If m_lFieldCount = 0 Then
         Exit Sub
     End If
-    ReDim m_aColCoerce(0 To m_lFieldCount - 1) As Long
+    ReDim m_aColCoerce(0 To m_lFieldCount - 1) As eCoerceKind
     For lCol = 0 To m_lFieldCount - 1
-        sType = UCase$(m_aDeclType(lCol))
-        If InStr(sType, "DATE") > 0 Or InStr(sType, "TIME") > 0 Then
-            m_aColCoerce(lCol) = 1
-        ElseIf InStr(sType, "BIT") > 0 Or InStr(sType, "BOOL") > 0 Then
-            m_aColCoerce(lCol) = 2
-        ElseIf pvDeclTypeCode(m_aDeclType(lCol)) = 1 Then
+        Select Case pvDeclTypeCode(m_aDeclType(lCol))
+        Case TYPE_DATE
+            m_aColCoerce(lCol) = COERCE_DATE
+        Case TYPE_BOOLEAN
+            m_aColCoerce(lCol) = COERCE_BOOLEAN
+        Case TYPE_INTEGER
             '--- INTEGER columns type by their load-time width class
             Select Case pvIntWidth(lCol)
             Case 1
-                m_aColCoerce(lCol) = 3
+                m_aColCoerce(lCol) = COERCE_BYTE
             Case 8
-                m_aColCoerce(lCol) = 4
+                m_aColCoerce(lCol) = COERCE_INT64
             End Select
-        End If
+        End Select
     Next
 End Sub
 
@@ -3239,25 +3256,25 @@ Private Function pvCoerceCell(ByVal lCol As Long, vValue As Variant) As Variant
     End If
     On Error GoTo EH
     Select Case m_aColCoerce(lCol)
-    Case 1
+    Case COERCE_DATE
         '--- numeric date storage is a VB date serial (not julian)
         If VarType(vValue) = vbString Then
             pvCoerceCell = CDate(vValue)
         Else
             pvCoerceCell = CDate(CDbl(vValue))
         End If
-    Case 2
+    Case COERCE_BOOLEAN
         If VarType(vValue) = vbString Then
             dblValue = Val(vValue)
         Else
             dblValue = CDbl(vValue)
         End If
         pvCoerceCell = (dblValue >= 1)
-    Case 3
+    Case COERCE_BYTE
         If vValue >= 0 And vValue <= 255 Then
             pvCoerceCell = CByte(vValue)
         End If
-    Case 4
+    Case COERCE_INT64
         pvCoerceCell = Int64Variant(vValue)
     End Select
     Exit Function
@@ -3299,12 +3316,12 @@ Private Function pvCellDbl(vCell As Variant) As Double
     End If
 End Function
 
-Private Function pvCellBytes(vCell As Variant, ByVal lType As Long) As Byte()
+Private Function pvCellBytes(vCell As Variant, ByVal eType As eDeclType) As Byte()
     Dim baEmpty()       As Byte
 
     If pvIsNullCell(vCell) Then
         pvCellBytes = baEmpty
-    ElseIf lType = 4 And VarType(vCell) = vbByte + vbArray Then
+    ElseIf eType = TYPE_BLOB And VarType(vCell) = vbByte + vbArray Then
         pvCellBytes = vCell
     ElseIf VarType(vCell) = vbString Then
         pvCellBytes = ToUtf8Array(CStr(vCell))
@@ -3314,10 +3331,10 @@ Private Function pvCellBytes(vCell As Variant, ByVal lType As Long) As Byte()
     End If
 End Function
 
-Private Function pvCellBytesLen(vCell As Variant, ByVal lType As Long) As Long
+Private Function pvCellBytesLen(vCell As Variant, ByVal eType As eDeclType) As Long
     Dim baCell()        As Byte
 
-    baCell = pvCellBytes(vCell, lType)
+    baCell = pvCellBytes(vCell, eType)
     pvCellBytesLen = pvBytesLen(baCell)
 End Function
 
@@ -3327,14 +3344,14 @@ Private Function pvBytesLen(baBuf() As Byte) As Long
 QH:
 End Function
 
-Private Function pvSliceCell(baText() As Byte, ByVal lStart As Long, ByVal lLen As Long, ByVal lType As Long) As Variant
+Private Function pvSliceCell(baText() As Byte, ByVal lStart As Long, ByVal lLen As Long, ByVal eType As eDeclType) As Variant
     Dim baCell()        As Byte
 
     If lLen > 0 Then
         ReDim baCell(0 To lLen - 1) As Byte
         Call CopyMemory(baCell(0), baText(lStart), lLen)
     End If
-    If lType = 4 Then
+    If eType = TYPE_BLOB Then
         pvSliceCell = baCell
     ElseIf lLen = 0 Then
         pvSliceCell = vbNullString
