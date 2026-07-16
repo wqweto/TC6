@@ -44,6 +44,7 @@ Module=mdMemDBTests; mdMemDBTests.bas
 Module=mdUdfTests; mdUdfTests.bas
 Module=mdEventTests; mdEventTests.bas
 Module=mdConverterTests; mdConverterTests.bas
+Module=mdErrorTests; mdErrorTests.bas
 Startup="(None)"
 ExeName32="TestRunner.dll"
 Command32=""

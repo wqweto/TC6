@@ -97,6 +97,10 @@ End Sub
 Public Function Execute(Optional ByVal ReadOnly As Boolean) As cRecordset
     Dim oRs             As cRecordset
 
+    '--- a compile failure deferred by pvPrepare surfaces here
+    If m_hStmt = 0 Then
+        m_hStmt = PrepareStatement(m_oConnection, m_sExecSql, IsSelect:=True)
+    End If
     Set oRs = New cRecordset
     On Error GoTo EH
     oRs.frLoadStmt m_oConnection, m_sSql, m_hStmt
@@ -124,9 +128,18 @@ End Sub
 
 Private Sub pvPrepare(sSql As String)
     pvFinalize
-    m_hStmt = PrepareStatement(m_oConnection, sSql)
+    '--- RC6 semantics: a select command demands at least one parameter,
+    '--- but an invalid statement is accepted silently (compile deferred to
+    '--- Execute)
+    If Not pvHasParams(sSql) Then
+        Err.Raise vbObjectError, "cSelectCommand.SQL", "Couldn't find any Parameters in the query-string"
+    End If
     m_sSql = sSql
     m_sExecSql = sSql
+    On Error Resume Next
+    m_hStmt = PrepareStatement(m_oConnection, sSql, IsSelect:=True)
+    '--- the swallowed error must not linger in the global Err object
+    On Error GoTo 0
 End Sub
 
 Private Sub pvReplParam(ByVal lIdx As Long, sText As String)
@@ -136,12 +149,57 @@ Private Sub pvReplParam(ByVal lIdx As Long, sText As String)
     '--- re-prepare; the SQL property keeps returning the original template
     lPos = pvNthParamPos(m_sExecSql, lIdx)
     If lPos = 0 Then
-        Err.Raise 5, "cSelectCommand", "No such parameter"
+        Err.Raise 5, "cSelectCommand.ReplTextBlock", "No such parameter"
     End If
     m_sExecSql = Left$(m_sExecSql, lPos - 1) & sText & Mid$(m_sExecSql, lPos + 1)
     pvFinalize
-    m_hStmt = PrepareStatement(m_oConnection, m_sExecSql)
+    m_hStmt = PrepareStatement(m_oConnection, m_sExecSql, IsSelect:=True)
 End Sub
+
+Private Function pvHasParams(sSql As String) As Boolean
+    Dim lPos            As Long
+    Dim sChar           As String
+
+    lPos = 1
+    Do While lPos <= Len(sSql)
+        sChar = Mid$(sSql, lPos, 1)
+        Select Case sChar
+        Case "'", """", "`"
+            lPos = InStr(lPos + 1, sSql, sChar)
+            If lPos = 0 Then
+                Exit Function
+            End If
+        Case "["
+            lPos = InStr(lPos + 1, sSql, "]")
+            If lPos = 0 Then
+                Exit Function
+            End If
+        Case "-"
+            If Mid$(sSql, lPos, 2) = "--" Then
+                lPos = InStr(lPos + 1, sSql, vbLf)
+                If lPos = 0 Then
+                    Exit Function
+                End If
+            End If
+        Case "/"
+            If Mid$(sSql, lPos, 2) = "/*" Then
+                lPos = InStr(lPos + 1, sSql, "*/") + 1
+                If lPos = 1 Then
+                    Exit Function
+                End If
+            End If
+        Case "?"
+            pvHasParams = True
+            Exit Function
+        Case ":", "@", "$"
+            If Mid$(sSql, lPos + 1, 1) Like "[0-9A-Za-z_]" Then
+                pvHasParams = True
+                Exit Function
+            End If
+        End Select
+        lPos = lPos + 1
+    Loop
+End Function
 
 Private Function pvNthParamPos(sSql As String, ByVal lIdx As Long) As Long
     Dim lPos            As Long
@@ -195,13 +253,10 @@ Private Sub pvFinalize()
 End Sub
 
 Private Sub pvCheck(ByVal lRc As Long)
+    '--- RC6 surfaces select-command bind errors as a plain subscript error
     If lRc <> SQLITE_OK Then
-        Err.Raise vbObjectError, "cSelectCommand", m_oConnection.LastDBError()
+        Err.Raise 9
     End If
-End Sub
-
-Private Sub pvNotImpl(sName As String)
-    Err.Raise vbObjectError, "cSelectCommand." & sName, "Not implemented yet"
 End Sub
 
 Private Sub Class_Terminate()

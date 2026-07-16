@@ -217,7 +217,7 @@ End Property
 
 Public Property Let AbsolutePosition(ByVal RHS As Long)
     If RHS < 1 Or RHS > m_lRecordCount Then
-        Err.Raise vbObjectError, "cRecordset", "Invalid position"
+        Err.Raise vbObjectError, "cRecordset.AbsolutePosition", "The OneBased Index is out of range"
     End If
     If m_lCurRow <> RHS - 1 Then
         m_lCurRow = RHS - 1
@@ -303,7 +303,7 @@ End Function
 Public Sub AddNew()
     Dim lCol            As Long
 
-    pvCheckUpdatable
+    pvCheckUpdatable "AddNew"
     pvEnsureWriteState
     pvEnsureRowCapacity m_lRecordCount + 1
     For lCol = 0 To m_lFieldCount - 1
@@ -332,9 +332,12 @@ Public Sub Delete()
     Dim lCol            As Long
     Dim lPkIdx          As Long
 
-    pvCheckUpdatable
-    If m_lCurRow < 0 Or m_lCurRow >= m_lRecordCount Then
-        Err.Raise vbObjectError, "cRecordset", "No current row (BOF or EOF)"
+    pvCheckUpdatable "Delete"
+    '--- "postioned" replicates RC6's own typo verbatim
+    If m_lCurRow >= m_lRecordCount Then
+        Err.Raise vbObjectError, "cRecordset.Delete", "The Recordset is postioned at EOF"
+    ElseIf m_lCurRow < 0 Then
+        Err.Raise vbObjectError, "cRecordset.Delete", "The Recordset is postioned at BOF"
     End If
     pvEnsureWriteState
     '--- a pending insert just vanishes; existing rows queue a DELETE and keep
@@ -382,7 +385,7 @@ Public Sub UpdateBatch()
     If Not ContainsChanges Then
         Exit Sub
     End If
-    pvCheckUpdatable
+    pvCheckUpdatable "UpdateBatch"
     m_oConnection.BeginTrans "tc6_updatebatch"
     On Error GoTo EH
     For Each vElem In m_cDeleted
@@ -430,7 +433,7 @@ Public Sub MoveNext()
     '--- RC6 semantics: moving past the last row lands on EOF (Move(-2));
     '--- another MoveNext raises an error
     If m_lRecordCount = 0 Or m_lCurRow >= m_lRecordCount Then
-        Err.Raise vbObjectError, "cRecordset", "Already at EOF"
+        Err.Raise vbObjectError, "cRecordset.MoveNext", "The Recordset has already reached EOF"
     End If
     m_lCurRow = m_lCurRow + 1
     RaiseEvent Move(pvEventPos())
@@ -438,7 +441,7 @@ End Sub
 
 Public Sub MovePrevious()
     If m_lRecordCount = 0 Or m_lCurRow < 0 Then
-        Err.Raise vbObjectError, "cRecordset", "Already at BOF"
+        Err.Raise vbObjectError, "cRecordset.MovePrevious", "The Recordset has already reached BOF"
     End If
     m_lCurRow = m_lCurRow - 1
     RaiseEvent Move(pvEventPos())
@@ -828,7 +831,7 @@ Friend Sub frOpenParams(oCnn As cConnection, sSql As String, aParams() As Varian
     On Error GoTo EH
     For lIdx = LBound(aParams) To UBound(aParams)
         If BindVariant(hStmt, lIdx - LBound(aParams) + 1, aParams(lIdx)) <> SQLITE_OK Then
-            Err.Raise vbObjectError, "cRecordset", m_oConnection.LastDBError()
+            Err.Raise vbObjectError, "cRecordset.frOpenParams", m_oConnection.LastDBError()
         End If
     Next
     '--- pvMaterialize finalizes the statement on all paths incl. raising
@@ -875,7 +878,8 @@ End Function
 
 Friend Function frCellValue(ByVal lCol As Long) As Variant
     If m_lCurRow < 0 Or m_lCurRow >= m_lRecordCount Then
-        Err.Raise vbObjectError, "cRecordset", "No current row (BOF or EOF)"
+        '--- "BOF of EOF" replicates RC6's own typo verbatim
+        Err.Raise vbObjectError, "cRecordset.frCellValue", "Either BOF of EOF is True"
     End If
     frCellValue = pvCoerceCell(lCol, m_aData(lCol, m_lCurRow))
 End Function
@@ -889,7 +893,7 @@ End Function
 
 Friend Sub frSetCellValue(ByVal lCol As Long, vValue As Variant)
     If m_lCurRow < 0 Or m_lCurRow >= m_lRecordCount Then
-        Err.Raise vbObjectError, "cRecordset", "No current row (BOF or EOF)"
+        Err.Raise vbObjectError, "cRecordset.frSetCellValue", "Either BOF of EOF is True"
     End If
     frSetCellValueAt m_lCurRow, lCol, vValue
 End Sub
@@ -898,7 +902,13 @@ Friend Sub frSetCellValueAt(ByVal lRow As Long, ByVal lCol As Long, vValue As Va
     If lRow < 0 Or lRow >= m_lRecordCount Or lCol < 0 Or lCol >= m_lFieldCount Then
         Err.Raise 9
     End If
-    pvCheckWritable lCol
+    '--- RC6 semantics: a write to a non-updatable recordset or an expression
+    '--- column is silently ignored (no error, no dirty flag)
+    If Not m_bUpdatable Then
+        Exit Sub
+    ElseIf Len(m_aOrigColumn(lCol)) = 0 Then
+        Exit Sub
+    End If
     '--- RC6 semantics: assigning the current value is a complete no-op (no
     '--- dirty flag, no FieldChange)
     If pvCellValueEquals(m_aData(lCol, lRow), vValue) Then
@@ -1007,7 +1017,7 @@ End Sub
 
 Private Function pvPrepare(sSql As String) As LongPtr
     pvClear
-    pvPrepare = PrepareStatement(m_oConnection, sSql)
+    pvPrepare = PrepareStatement(m_oConnection, sSql, IsSelect:=True)
 End Function
 
 Private Sub pvMaterialize(ByVal hStmt As LongPtr, Optional ByVal bFinalize As Boolean = True)
@@ -1056,9 +1066,10 @@ Private Sub pvMaterialize(ByVal hStmt As LongPtr, Optional ByVal bFinalize As Bo
     If bFinalize Then
         Call stub_sqlite3_finalize(hStmt)
     End If
-    '--- a step error (e.g. a UDF calling SetResultError) fails the load
+    '--- a step error (e.g. a UDF calling SetResultError) fails the load;
+    '--- RC6 appends the step result code in parentheses here (only here)
     If lRc <> SQLITE_DONE Then
-        Err.Raise vbObjectError, "cRecordset", m_oConnection.LastDBError()
+        Err.Raise vbObjectError, "cRecordset.pvMaterialize", "Cannot execute Select-Statement: " & m_oConnection.LastDBError() & " (" & lRc & ")"
     End If
     m_lRecordCount = lRow
     m_lNextLabel = lRow
@@ -1300,16 +1311,9 @@ Private Sub pvEnsureRowCapacity(ByVal lRows As Long)
     End If
 End Sub
 
-Private Sub pvCheckUpdatable()
+Private Sub pvCheckUpdatable(sMethod As String)
     If Not m_bUpdatable Then
-        Err.Raise vbObjectError, "cRecordset", "Recordset is not updatable"
-    End If
-End Sub
-
-Private Sub pvCheckWritable(ByVal lCol As Long)
-    pvCheckUpdatable
-    If Len(m_aOrigColumn(lCol)) = 0 Then
-        Err.Raise vbObjectError, "cRecordset", "Column is an expression and cannot be updated"
+        Err.Raise vbObjectError, "cRecordset." & sMethod, "Recordset is not updatable"
     End If
 End Sub
 
@@ -1430,7 +1434,7 @@ Private Sub pvExecParams(sSql As String, aParams() As Variant)
         lRc = stub_sqlite3_step(hStmt)
     Loop While lRc = SQLITE_ROW
     If lRc <> SQLITE_DONE Then
-        Err.Raise vbObjectError, "cRecordset.UpdateBatch", m_oConnection.LastDBError()
+        Err.Raise vbObjectError, "cRecordset.UpdateBatch", "Cannot execute SQL-Statement: " & m_oConnection.LastDBError()
     End If
     Call stub_sqlite3_finalize(hStmt)
     Exit Sub
@@ -1536,12 +1540,12 @@ Private Sub pvParseSort(aCols() As Long, aDesc() As Boolean, lKeys As Long)
         If Len(sName) > 0 Then
             sDir = vbNullString
             If Left$(sName, 1) = "[" Then
+                '--- RC6 treats an unclosed bracket as a literal field name
                 lPos = InStr(sName, "]")
-                If lPos = 0 Then
-                    Err.Raise 5, "cRecordset.Sort", "Invalid sort expression"
+                If lPos > 0 Then
+                    sDir = Trim$(Mid$(sName, lPos + 1))
+                    sName = Mid$(sName, 2, lPos - 2)
                 End If
-                sDir = Trim$(Mid$(sName, lPos + 1))
-                sName = Mid$(sName, 2, lPos - 2)
             Else
                 lPos = InStr(sName, " ")
                 If lPos > 0 Then
@@ -1551,7 +1555,7 @@ Private Sub pvParseSort(aCols() As Long, aDesc() As Boolean, lKeys As Long)
             End If
             aCols(lKeys) = frFieldIndex(sName)
             If aCols(lKeys) < 0 Then
-                Err.Raise vbObjectError, "cRecordset.Sort", "Unknown field '" & sName & "'"
+                Err.Raise vbObjectError, "cRecordset.Sort", "No such Field-Def: " & sName
             End If
             aDesc(lKeys) = (StrComp(sDir, "DESC", vbTextCompare) = 0)
             lKeys = lKeys + 1
@@ -1666,7 +1670,7 @@ Private Function pvFindMove(ByVal lFrom As Long, ByVal lStep As Long, sCriterion
     Dim lRow            As Long
 
     If Not pvParseCriterion(sCriterion, lCol, lOp, vValue) Then
-        Err.Raise 5, "cRecordset.Find", "Invalid criterion '" & sCriterion & "'"
+        Err.Raise vbObjectError, "cRecordset.Find", "This is not a valid Find-Criterion"
     End If
     lRow = lFrom
     Do While lRow >= 0 And lRow < m_lRecordCount
@@ -2160,7 +2164,7 @@ Private Function pvContentWriteChanges() As Byte()
     Dim lOps            As Long
 
     If Not m_bUpdatable Or m_lPkCount <> 1 Then
-        Err.Raise vbObjectError, "cRecordset", "Recordset is not updatable"
+        Err.Raise vbObjectError, "cRecordset.ContentChangesOnly", "Recordset is not updatable"
     End If
     lKeyCol = m_aPkCols(0)
     bTextPk = pvIsTextishCol(lKeyCol)
@@ -2698,10 +2702,10 @@ Private Sub pvApplyChangesOnly()
     Dim aDone()         As Boolean
 
     If m_oConnection Is Nothing Then
-        Err.Raise vbObjectError, "cRecordset", "No active connection"
+        Err.Raise vbObjectError, "cRecordset.UpdateBatch", "No active connection"
     End If
     If m_lChgKeyCol < 0 Or m_lChgKeyCol >= m_lFieldCount Then
-        Err.Raise vbObjectError, "cRecordset", "Recordset is not updatable"
+        Err.Raise vbObjectError, "cRecordset.UpdateBatch", "Recordset is not updatable"
     End If
     sTable = QuoteIdentifier(IIf(Len(m_aOrigDb(m_lChgKeyCol)) > 0, m_aOrigDb(m_lChgKeyCol), "main")) & "." & QuoteIdentifier(m_aOrigTable(m_lChgKeyCol))
     sKey = QuoteIdentifier(m_aOrigColumn(m_lChgKeyCol))
@@ -3496,16 +3500,10 @@ Private Sub pvEnsureBuf(baBuf() As Byte, ByVal lNeeded As Long)
     End If
 End Sub
 
-Private Sub pvNotImpl(sName As String)
-    Err.Raise vbObjectError, "cRecordset." & sName, "Not implemented yet"
-End Sub
-
 Private Sub Class_Initialize()
     m_bMapNullToEmpty = True
-    g_lLiveRecordsets = g_lLiveRecordsets + 1
 End Sub
 
 Private Sub Class_Terminate()
     pvReleaseFields
-    g_lLiveRecordsets = g_lLiveRecordsets - 1
 End Sub

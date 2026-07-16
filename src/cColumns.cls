@@ -123,5 +123,7 @@ Private Function pvItemByName(sName As String) As cColumn
     Set pvItemByName = m_cItems.Item(sName)
     Exit Function
 EH:
-    Err.Raise 9, "cColumns", "Unknown column '" & sName & "'"
+    '--- clear the pending collection error so 9 gets its default description
+    Err.Clear
+    Err.Raise 9
 End Function

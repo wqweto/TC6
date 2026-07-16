@@ -152,7 +152,7 @@ End Sub
 
 Private Sub pvPrepare(sSql As String)
     pvFinalize
-    m_hStmt = PrepareStatement(m_oConnection, sSql)
+    m_hStmt = PrepareStatement(m_oConnection, sSql, IsSelect:=True)
     m_sSql = sSql
     m_lStepCounter = 0
 End Sub
@@ -166,7 +166,7 @@ End Sub
 
 Private Sub pvCheck(ByVal lRc As Long)
     If lRc <> SQLITE_OK Then
-        Err.Raise vbObjectError, "cCursor", m_oConnection.LastDBError()
+        Err.Raise vbObjectError, "cCursor.SetParam", m_oConnection.LastDBError()
     End If
 End Sub
 

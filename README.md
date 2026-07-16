@@ -1,4 +1,4 @@
-# TC6 — SQLite for VB6 and TwinBasic
+# TC6 (TwinClient 6) — SQLite for VB6 and TwinBasic
 
 TC6 reimplements the SQLite subsystem of Olaf Schmidt's [vbRichClient6](https://vbrichclient.com)
 (RC6) as a plain VB6 ActiveX DLL, so no third-party binaries need to be

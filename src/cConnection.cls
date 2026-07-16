@@ -345,12 +345,33 @@ Public Function CreateCursor(SQL As String) As cCursor
 End Function
 
 Public Function Execute(SQL As String) As Boolean
+    Dim baSql()         As Byte
+    Dim pSql            As LongPtr
+    Dim hStmt           As LongPtr
     Dim lRc             As Long
 
-    lRc = pvExec(SQL)
-    If lRc <> SQLITE_OK Then
-        Err.Raise vbObjectError, "cConnection.Execute", pvLastError()
+    If m_hDb = 0 Then
+        Err.Raise vbObjectError, "cConnection.Execute", "Database is not open"
     End If
+    '--- prepare/step each statement (instead of sqlite3_exec) so compile and
+    '--- runtime failures raise RC6's distinct message prefixes
+    baSql = ToUtf8Array(SQL & vbNullChar)
+    pSql = VarPtr(baSql(0))
+    Do
+        If stub_sqlite3_prepare_v2(m_hDb, pSql, -1, VarPtr(hStmt), VarPtr(pSql)) <> SQLITE_OK Then
+            Err.Raise vbObjectError, "cConnection.Execute", "Cannot compile SQL-Statement: " & pvLastError()
+        End If
+        If hStmt = 0 Then
+            Exit Do
+        End If
+        Do
+            lRc = stub_sqlite3_step(hStmt)
+        Loop While lRc = SQLITE_ROW
+        Call stub_sqlite3_finalize(hStmt)
+        If lRc <> SQLITE_DONE Then
+            Err.Raise vbObjectError, "cConnection.Execute", "Cannot execute SQL-Statement: " & pvLastError()
+        End If
+    Loop
     Execute = True
 End Function
 
@@ -531,17 +552,6 @@ Private Sub pvCloseDatabase()
     Loop
 End Sub
 
-Private Function pvExec(sSql As String) As Long
-    Dim baSql()         As Byte
-
-    If m_hDb = 0 Then
-        pvExec = SQLITE_MISUSE
-        Exit Function
-    End If
-    baSql = ToUtf8Array(sSql & vbNullChar)
-    pvExec = stub_sqlite3_exec(m_hDb, VarPtr(baSql(0)), 0, 0, 0)
-End Function
-
 Friend Sub frExecCmd(sSql As String, aParams() As Variant)
     Dim baSql()         As Byte
     Dim hStmt           As LongPtr
@@ -553,7 +563,7 @@ Friend Sub frExecCmd(sSql As String, aParams() As Variant)
     End If
     baSql = ToUtf8Array(sSql & vbNullChar)
     If stub_sqlite3_prepare_v2(m_hDb, VarPtr(baSql(0)), -1, VarPtr(hStmt), 0) <> SQLITE_OK Then
-        Err.Raise vbObjectError, "cConnection.ExecCmd", pvLastError()
+        Err.Raise vbObjectError, "cConnection.ExecCmd", "Cannot compile SQL-Statement: " & pvLastError()
     End If
     On Error GoTo EH
     For lIdx = LBound(aParams) To UBound(aParams)
@@ -566,7 +576,7 @@ Friend Sub frExecCmd(sSql As String, aParams() As Variant)
         lRc = stub_sqlite3_step(hStmt)
     Loop While lRc = SQLITE_ROW
     If lRc <> SQLITE_DONE Then
-        Err.Raise vbObjectError, "cConnection.ExecCmd", pvLastError()
+        Err.Raise vbObjectError, "cConnection.ExecCmd", "Cannot execute SQL-Statement: " & pvLastError()
     End If
     Call stub_sqlite3_finalize(hStmt)
     Exit Sub

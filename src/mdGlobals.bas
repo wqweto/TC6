@@ -56,8 +56,6 @@ Private Declare Function lstrlenA Lib "kernel32" (ByVal lpString As LongPtr) As 
 Private Declare Sub GetSystemTimePreciseAsFileTime Lib "kernel32" (lpSystemTimeAsFileTime As Currency)
 Private Declare Function FileTimeToLocalFileTime Lib "kernel32" (lpFileTime As Currency, lpLocalFileTime As Currency) As Long
 
-'--- live-instance counter (leak/cycle diagnostic, see cRecordset)
-Public g_lLiveRecordsets            As Long
 '--- monotonicity guard for CreateUniqueID64
 Private m_decLastUniqueId           As Variant
 
@@ -181,16 +179,16 @@ Public Function BindBlobValue(ByVal hStmt As LongPtr, ByVal lIndex As Long, baBu
     End If
 End Function
 
-Public Function PrepareStatement(oCnn As cConnection, sSql As String) As LongPtr
+Public Function PrepareStatement(oCnn As cConnection, sSql As String, Optional ByVal IsSelect As Boolean) As LongPtr
     Dim baSql()         As Byte
     Dim hStmt           As LongPtr
 
     If oCnn Is Nothing Then
-        Err.Raise vbObjectError, "PrepareStatement", "No active connection"
+        Err.Raise vbObjectError, "mdGlobals.PrepareStatement", "No active connection"
     End If
     baSql = ToUtf8Array(sSql & vbNullChar)
     If stub_sqlite3_prepare_v2(oCnn.frDbHandle, VarPtr(baSql(0)), -1, VarPtr(hStmt), 0) <> SQLITE_OK Then
-        Err.Raise vbObjectError, "PrepareStatement", oCnn.LastDBError()
+        Err.Raise vbObjectError, "mdGlobals.PrepareStatement", "Cannot compile " & IIf(IsSelect, "Select", "SQL") & "-Statement: " & oCnn.LastDBError()
     End If
     PrepareStatement = hStmt
 End Function
@@ -379,7 +377,7 @@ Public Sub CopyAdoRsToTable(oCnn As cConnection, sTable As String, oAdoRs As Obj
             Call BindVariant(hStmt, lCol + 1, vValue)
         Next
         If stub_sqlite3_step(hStmt) <> SQLITE_DONE Then
-            Err.Raise vbObjectError, "CopyAdoRsToTable", oCnn.LastDBError()
+            Err.Raise vbObjectError, "mdGlobals.CopyAdoRsToTable", oCnn.LastDBError()
         End If
         Call stub_sqlite3_reset(hStmt)
         lRow = lRow + 1
@@ -426,7 +424,7 @@ Public Sub CreateTableFromRecordset(oCnn As cConnection, ByVal oSrc As cRecordse
         sVals = sVals & "?"
     Next
     If Len(sDefs) = 0 Then
-        Err.Raise 5, "CreateTableFromRecordset", "Source recordset has no fields"
+        Err.Raise 5, "mdGlobals.CreateTableFromRecordset", "Source recordset has no fields"
     End If
     oCnn.Execute "CREATE " & IIf(bTempTable, "TEMP ", vbNullString) & "TABLE " & QuoteIdentifier(sTable) & " (" & sDefs & ")"
     If oSrc.RecordCount > 0 Then

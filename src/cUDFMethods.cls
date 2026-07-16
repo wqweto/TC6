@@ -166,7 +166,7 @@ Private Function pvValue(ByVal lIdx As Long) As LongPtr
     Dim lpValue         As LongPtr
 
     If lIdx < 1 Or lIdx > m_lArgc Then
-        Err.Raise 9, "cUDFMethods", "Parameter index out of range"
+        Err.Raise 9, "cUDFMethods.pvValue", "Parameter index out of range"
     End If
     Call CopyMemory(lpValue, ByVal m_lpArgv + (lIdx - 1) * LenB(lpValue), LenB(lpValue))
     pvValue = lpValue

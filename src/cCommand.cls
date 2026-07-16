@@ -112,7 +112,7 @@ Public Function Execute() As Boolean
     Loop While lRc = SQLITE_ROW
     Call stub_sqlite3_reset(m_hStmt)
     If lRc <> SQLITE_DONE Then
-        Err.Raise vbObjectError, "cCommand.Execute", m_oConnection.LastDBError()
+        Err.Raise vbObjectError, "cCommand.Execute", "Cannot execute SQL-Statement: " & m_oConnection.LastDBError()
     End If
     Execute = True
 End Function
@@ -145,12 +145,8 @@ End Sub
 
 Private Sub pvCheck(ByVal lRc As Long)
     If lRc <> SQLITE_OK Then
-        Err.Raise vbObjectError, "cCommand", m_oConnection.LastDBError()
+        Err.Raise vbObjectError, "cCommand.SetParam", "Cannot set Parameter: " & m_oConnection.LastDBError()
     End If
-End Sub
-
-Private Sub pvNotImpl(sName As String)
-    Err.Raise vbObjectError, "cCommand." & sName, "Not implemented yet"
 End Sub
 
 Private Sub Class_Terminate()

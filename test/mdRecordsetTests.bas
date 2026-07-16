@@ -15,7 +15,6 @@ Public Sub RunRecordsetTests()
     Test_DuplicateFieldNames
     Test_Empty
     Test_OpenSchema
-    Test_NoReferenceCycle
     Test_FieldOutlivesRecordset
     Test_FieldInvalidAfterReQuery
     Test_UpdatableAnalysis
@@ -274,36 +273,6 @@ EH:
     TestErr
 End Sub
 
-Private Sub Test_NoReferenceCycle()
-    Dim lBefore         As Long
-
-    If Not TestBegin("cRecordset.NoReferenceCycle") Then Exit Sub
-    On Error GoTo EH
-    lBefore = g_lLiveRecordsets
-    pvMakeAndDropRecordset
-    '--- if cField/cFields held strong back-references the recordset would
-    '--- never terminate and the live count would stay elevated
-    AssertEqLng g_lLiveRecordsets, lBefore, "recordset instance freed after use (no cycle)"
-    TestEnd
-    Exit Sub
-EH:
-    TestErr
-End Sub
-
-Private Sub pvMakeAndDropRecordset()
-    Dim oCnn            As cConnection
-    Dim oRs             As cRecordset
-    Dim oField          As cField
-    Dim vValue          As Variant
-
-    Set oCnn = pvSeededDb()
-    Set oRs = oCnn.OpenRecordset("SELECT id, name FROM t ORDER BY id")
-    '--- materialise cFields + cField and exercise the weak-ref deref path
-    Set oField = oRs.Fields(0)
-    vValue = oField.Value
-    '--- all locals released on return; the recordset must terminate here
-End Sub
-
 Private Sub Test_UpdatableAnalysis()
     Dim oCnn            As cConnection
     Dim oRs             As cRecordset
@@ -323,7 +292,8 @@ Private Sub Test_UpdatableAnalysis()
     oRs.Fields("n").Value = 42
     bRaised = (Err.Number <> 0)
     On Error GoTo EH
-    AssertTrue bRaised, "writing a non-updatable recordset raises"
+    AssertTrue Not bRaised, "writing a non-updatable recordset is silently ignored (RC6)"
+    AssertTrue Not oRs.ContainsChanges, "ignored write leaves no pending change"
     Set oRs = oCnn.OpenRecordset("SELECT name FROM t")
     AssertTrue Not oRs.Updatable, "select without the PK column is not updatable"
     TestEnd

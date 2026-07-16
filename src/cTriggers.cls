@@ -69,5 +69,7 @@ Private Function pvItemByName(sName As String) As cTrigger
     Set pvItemByName = m_cItems.Item(sName)
     Exit Function
 EH:
-    Err.Raise 9, "cTriggers", "Unknown trigger '" & sName & "'"
+    '--- clear the pending collection error so 9 gets its default description
+    Err.Clear
+    Err.Raise 9
 End Function

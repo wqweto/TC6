@@ -81,5 +81,7 @@ Private Function pvItemByName(sName As String) As cDataBase
     Set pvItemByName = m_cItems.Item(sName)
     Exit Function
 EH:
-    Err.Raise 9, "cDataBases", "Unknown database '" & sName & "'"
+    '--- clear the pending collection error so 5 gets its default description
+    Err.Clear
+    Err.Raise 5
 End Function

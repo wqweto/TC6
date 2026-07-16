@@ -1,4 +1,4 @@
-# TC6 SQLite Replacement — Working Notes
+# TC6 (TwinClient 6) — Working Notes
 
 ## Goal
 
@@ -153,6 +153,50 @@ mdEventTests):
 - **`Sort = ""`**: RC6 restores the natural row order (nondestructive row
   chain); TC6's in-place permute keeps the current order (still rewinds
   with `Move(0)`).
+
+### Error contract (probed against RC6 6.0.15, pinned by mdErrorTests)
+
+37 scenarios trigger every user-facing `Err.Raise` identically on TC6 and
+the live RC6.dll and compare `Err.Number & "|" & Err.Description`. RC6
+never populates `Err.Source` (VB stamps the project name), so Source is
+excluded from the comparison; TC6 fills it with `Class.Method` anyway.
+
+- **SQL engine errors** carry a prefix + the raw sqlite message:
+  `Cannot compile Select-Statement: ` (OpenRecordset/select prepare),
+  `Cannot compile SQL-Statement: ` (Execute/ExecCmd/cCommand prepare),
+  `Cannot execute SQL-Statement: ` (any DML step failure). A step failure
+  while *materialising a select* additionally appends the result code:
+  `Cannot execute Select-Statement: integer overflow (1)` — only there.
+  `cConnection.Execute` prepares/steps each statement itself (not
+  `sqlite3_exec`) so the two prefixes can be told apart.
+- **Recordset state errors** (all `vbObjectError`) replicate RC6's exact
+  strings *including two RC6 typos*: `The OneBased Index is out of range`,
+  `The Recordset has already reached EOF`/`BOF`, `The Recordset is
+  postioned at EOF`/`BOF` (Delete, sic), `Either BOF of EOF is True`
+  (cell access, sic), `Recordset is not updatable`.
+- **Silent ignores**: RC6 raises *nothing* when assigning `Value` on a
+  non-updatable recordset or an expression column — the write is simply
+  dropped (TC6: early `Exit Sub` in `frSetCellValueAt`).
+- **Field lookups** (`cFields`, also `Sort`): unknown name raises
+  `vbObjectError` `No such Field-Def: <name>` (an unclosed `[` sort token
+  is treated as a literal field name, e.g. `No such Field-Def: [unclosed`),
+  index out of range raises `Field-Index out of range`. Bad find criteria:
+  `This is not a valid Find-Criterion`.
+- **Schema collections** (`cTables`/`cColumns`/`cIndexes`/`cViews`/
+  `cTriggers`) raise a bare error **9** (`Subscript out of range`) on a
+  name miss; `cDataBases` raises bare **5**. VB6 trap: `Err.Raise 9`
+  inside an active error handler *reuses the pending `Err.Description`*
+  (the VBA.Collection miss text) — `Err.Clear` first or the default
+  description is wrong.
+- **Commands**: `cSelectCommand` demands at least one parameter
+  (`?`/`:n`/`@n`/`$n`) — otherwise `Couldn't find any Parameters in the
+  query-string` — but accepts an *invalid* statement silently, deferring
+  the compile (and its `Cannot compile Select-Statement` error) to
+  `Execute`. VB6 trap there: an error swallowed by `On Error Resume Next`
+  lingers in the global `Err` object after the Sub exits — follow with
+  `On Error GoTo 0`. `cCommand` compiles eagerly. Bind errors diverge by
+  class: `cCommand` raises `Cannot set Parameter: <msg>`, `cSelectCommand`
+  raises a bare error 9.
 
 ## IDL → VB6 type mapping used
 
@@ -799,9 +843,7 @@ by `cConnection.OpenRecordset`/`OpenSchema` (`frOpen`), or via the public
   the same way — otherwise VB's teardown would auto-Release the still-alive
   recordset through the non-refcounted member (unbalanced Release). A strong
   back-ref would be a cycle that keeps the recordset (and
-  its whole result matrix) alive forever. Proven by the `NoReferenceCycle`
-  test: a module-level `g_lLiveRecordsets` (bumped in `Class_Initialize`/
-  `Terminate`) returns to baseline after a recordset goes out of scope.
+  its whole result matrix) alive forever.
   This weak-ref design is **final**: it matches the original RC6, where an
   orphaned field raises err 91 on every recordset-dependent member while
   `IndexInFieldList` keeps working (verified against RC6.dll 6.0.15). A

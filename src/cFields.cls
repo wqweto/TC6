@@ -37,7 +37,7 @@ Attribute Item.VB_UserMemId = 0
     If IsNumeric(ZeroBasedIdx_Or_FieldName) Then
         lIdx = CLng(ZeroBasedIdx_Or_FieldName)
         If lIdx < 0 Or lIdx >= m_cItems.Count Then
-            Err.Raise 9
+            Err.Raise vbObjectError, "cFields.Item", "Field-Index out of range"
         End If
         Set Item = m_cItems.Item(lIdx + 1)
     Else
@@ -100,5 +100,5 @@ Private Function pvItemByName(sName As String) As cField
     Set pvItemByName = m_cItems.Item(sName)
     Exit Function
 EH:
-    Err.Raise 9, "cFields", "Unknown field '" & sName & "'"
+    Err.Raise vbObjectError, "cFields.Item", "No such Field-Def: " & sName
 End Function
